@@ -22,13 +22,15 @@ var (
 	flagNoGit    bool
 	flagLang     string
 	flagProvider string
+	version      = "dev"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "yvcdb [project/path]",
-	Short: "Your Vibe Code Deserves Better — automated refactoring powered by Claude Code or Codex",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  run,
+	Use:     "yvcdb [project/path]",
+	Short:   "Your Vibe Code Deserves Better — automated refactoring powered by Claude Code or Codex",
+	Version: version,
+	Args:    cobra.MaximumNArgs(1),
+	RunE:    run,
 }
 
 // Execute runs the YVCDB command-line application.
