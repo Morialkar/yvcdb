@@ -11,13 +11,15 @@ The interface defaults to English and also supports French.
 - Git, unless YVCDB is run with `--no-git`
 - An authenticated session for the selected provider
 
-Verify the dependencies:
+Verify Go, Git, and the provider you intend to use:
 
 ```sh
 go version
+git --version
+
+# One of these is required:
 claude --version
 codex --version
-git --version
 ```
 
 ## Installation
@@ -76,6 +78,8 @@ The persistent file can also be edited directly:
 
 Codex runs non-interactively with JSONL output, ephemeral sessions, and a `workspace-write` sandbox. Claude continues to use its `stream-json` output mode.
 
+YVCDB ships parallel English and French core prompts. The configured language selects both the interface strings and the embedded prompt set.
+
 ## Usage
 
 Run YVCDB against the current directory:
@@ -129,7 +133,7 @@ Each completed phase waits for a human decision:
 | `r` | Retry with the previous iteration context |
 | `f` | Send precise free-form feedback to the agent and start another iteration |
 | `s` | Skip the result |
-| `q` | Quit |
+| `q` | Quit and cancel active agent subprocesses |
 
 During the parallel stage, use `Tab` or `1`–`3` to switch between runs.
 
@@ -146,7 +150,7 @@ When Git integration is enabled, YVCDB:
 - rebases parallel branches sequentially onto the updated base branch;
 - integrates them with fast-forward merges.
 
-If a rebase conflicts, it is aborted and the affected worktree is preserved for manual resolution. Run with a clean working tree for predictable results.
+If branch creation, commit, rebase, or merge fails, YVCDB stops that path and reports the error instead of silently advancing. Conflicted rebases are aborted and their worktrees are preserved for manual resolution. Run with a clean working tree for predictable results.
 
 ## Logs
 
@@ -166,7 +170,11 @@ go vet ./...
 go build ./...
 ```
 
-The phase prompts are embedded from `cmd/prompts/`. Core orchestration lives in `internal/tui`, provider execution in `internal/runner`, and Git operations in `internal/git`.
+The localized phase prompts are embedded from `cmd/prompts/en/` and `cmd/prompts/fr/`. Core orchestration lives in `internal/tui`, provider execution in `internal/runner`, and Git operations in `internal/git`.
+
+## License
+
+YVCDB is licensed under the [GNU Affero General Public License v3.0](LICENSE).
 
 ## Français
 
