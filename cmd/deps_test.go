@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,5 +25,26 @@ func TestLoadPromptsForEachLanguage(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCheckProvider(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	if err := checkProvider("claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkProvider("codex"); err == nil {
+		t.Fatal("expected missing Codex error")
+	}
+}
+
+func TestLoadPromptsRejectsUnknownLanguage(t *testing.T) {
+	if _, err := loadPrompts("de"); err == nil {
+		t.Fatal("expected unknown language to fail")
 	}
 }

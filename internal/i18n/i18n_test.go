@@ -17,3 +17,15 @@ func TestFrenchTranslationAndFormatting(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestPickAndMissingKey(t *testing.T) {
+	if got := New("en").Pick("English", "Français"); got != "English" {
+		t.Fatalf("got %q", got)
+	}
+	if got := New("fr").Pick("English", "Français"); got != "Français" {
+		t.Fatalf("got %q", got)
+	}
+	if got := New("en").T("missing.key"); got != "missing.key" {
+		t.Fatalf("got %q", got)
+	}
+}

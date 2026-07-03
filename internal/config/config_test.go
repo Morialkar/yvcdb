@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -13,6 +14,30 @@ func TestLoadDefaultsWhenConfigIsMissing(t *testing.T) {
 	}
 	if cfg.Language != "en" || cfg.Provider != "claude" || cfg.Model != "sonnet" {
 		t.Fatalf("unexpected defaults: %+v", cfg)
+	}
+}
+
+func TestLegacyEnvironmentOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("YVCDB_CONFIG_HOME", "")
+	t.Setenv("TVCMM_CONFIG_HOME", dir)
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(dir, "config.json") {
+		t.Fatalf("unexpected legacy path: %s", path)
+	}
+}
+
+func TestLoadRejectsMalformedJSON(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("YVCDB_CONFIG_HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil {
+		t.Fatal("expected malformed configuration error")
 	}
 }
 
