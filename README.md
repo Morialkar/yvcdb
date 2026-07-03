@@ -10,6 +10,13 @@ YVCDB is an interactive CLI that orchestrates structured codebase refactoring th
 
 The interface defaults to English and also supports French.
 
+## The AFTER methodology
+
+YVCDB is the reference implementation of the "Test Everything Rigorously" half of the AFTER methodology (Architect First, Test Everything Rigorously), my personal approach to AI-assisted development, applied to existing AI-generated codebases. The two halves map to the two ends of the workflow:
+
+- **Architect First**: no code generation before specification. Detailed specs, quality standards files (`CLAUDE.md`), explicit constraints, and architectural decisions are made by the human before the AI generates anything.
+- **Test Everything Rigorously**: nothing ships on trust. Generated code goes through tests (nominal, edge, and error cases), phased review with human validation gates, and a final human-approved checklist. The engineer's value shows up after generation, hence the name.
+
 ## Requirements
 
 - Go 1.26 or newer
@@ -210,7 +217,7 @@ The localized phase prompts are embedded from `cmd/prompts/en/` and `cmd/prompts
 
 ## How this tool was built
 
-YVCDB was developed with two AI assistants — Claude and Codex — following what I call the **AFTER** methodology: **Architect First, Test Everything Rigorously**. The human designs the architecture and workflow up front (phases, Git strategy, approval loops), the assistants implement against that design, and every piece of behavior is then locked in with rigorous tests — including error paths, race conditions, and deadlocks, several of which were caught by the tests themselves. An article detailing the methodology is coming soon.
+YVCDB was developed with two AI assistants — Claude and Codex — following the AFTER methodology described above. The human designs the architecture and workflow up front (phases, Git strategy, approval loops), the assistants implement against that design, and every piece of behavior is then locked in with rigorous tests — including error paths, race conditions, and deadlocks, several of which were caught by the tests themselves. An article detailing the methodology is coming soon.
 
 ## License
 
