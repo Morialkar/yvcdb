@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -293,6 +294,8 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			}
 			if err := sc.Err(); err != nil {
 				stderrScanErr = fmt.Errorf("read %s stderr: %w", provider, err)
+				// drain so the subprocess is not blocked writing to a full pipe
+				_, _ = io.Copy(io.Discard, stderr)
 			}
 		}()
 
@@ -341,8 +344,14 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		}
 
 		stdoutScanErr := sc.Err()
-		waitErr := cmd.Wait()
+		if stdoutScanErr != nil {
+			// drain the pipe so the subprocess is not blocked writing to it,
+			// which would deadlock cmd.Wait below
+			_, _ = io.Copy(io.Discard, stdout)
+		}
+		// finish reading both pipes before Wait: Wait closes them
 		stderrWG.Wait()
+		waitErr := cmd.Wait()
 		closeErr := f.Close()
 		close(lineCh)
 
