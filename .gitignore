@@ -1,0 +1,26 @@
+# Compiled binaries and build output
+/tvcmm
+/yvcdb
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Go tooling
+/vendor/
+coverage.*
+*.coverprofile
+
+# TVCMM generated output
+/refactor-logs/
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
