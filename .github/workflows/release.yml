@@ -13,7 +13,10 @@ jobs:
     name: Verify release
     uses: ./.github/workflows/ci.yml
     permissions:
-      contents: read
+      # the reusable workflow's quality job declares contents: write for the
+      # badge step; the caller must grant at least as much or the run fails
+      # at startup. The badge step itself only runs on pushes to main.
+      contents: write
 
   release:
     name: Publish GitHub release
