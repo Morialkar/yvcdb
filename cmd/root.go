@@ -8,10 +8,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	appconfig "github.com/morialkar/yvcdb/internal/config"
-	"github.com/morialkar/yvcdb/internal/i18n"
-	"github.com/morialkar/yvcdb/internal/phases"
-	"github.com/morialkar/yvcdb/internal/tui"
+	appconfig "github.com/Morialkar/yvcdb/internal/config"
+	"github.com/Morialkar/yvcdb/internal/i18n"
+	"github.com/Morialkar/yvcdb/internal/phases"
+	"github.com/Morialkar/yvcdb/internal/runner"
+	"github.com/Morialkar/yvcdb/internal/tui"
 )
 
 var (
@@ -30,6 +31,7 @@ var rootCmd = &cobra.Command{
 	RunE:  run,
 }
 
+// Execute runs the YVCDB command-line application.
 func Execute() {
 	if filepath.Base(os.Args[0]) == "tvcmm" {
 		rootCmd.Use = "tvcmm [project/path]"
@@ -44,7 +46,7 @@ func init() {
 	rootCmd.Flags().StringVar(&flagModel, "model", "", "AI model for this run (overrides configuration)")
 	rootCmd.Flags().StringVar(&flagProvider, "provider", "", "AI CLI provider: claude or codex (overrides configuration)")
 	rootCmd.Flags().StringVar(&flagLang, "lang", "", "Interface language: en or fr (overrides configuration)")
-	rootCmd.Flags().IntVar(&flagMaxTurns, "max-turns", 20, "Maximum Claude turns (Claude provider only)")
+	rootCmd.Flags().IntVar(&flagMaxTurns, "max-turns", runner.DefaultMaxTurns, "Maximum Claude turns (Claude provider only)")
 	rootCmd.Flags().BoolVar(&flagNoGit, "no-git", false, "Disable automatic git management")
 	rootCmd.AddCommand(configCmd)
 }
@@ -81,10 +83,10 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 	absDir, err := filepath.Abs(projectDir)
 	if err != nil {
-		return fmt.Errorf(l10n.Pick("invalid directory: %v", "répertoire invalide : %v"), err)
+		return fmt.Errorf(l10n.Pick("resolve project directory: %w", "résolution du répertoire du projet : %w"), err)
 	}
-	if _, err := os.Stat(absDir); os.IsNotExist(err) {
-		return fmt.Errorf(l10n.Pick("directory not found: %s", "répertoire introuvable : %s"), absDir)
+	if _, err := os.Stat(absDir); err != nil {
+		return fmt.Errorf(l10n.Pick("inspect project directory: %w", "inspection du répertoire du projet : %w"), err)
 	}
 
 	// Check the selected agent CLI.
@@ -103,9 +105,9 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load embedded prompts
-	prompts, err := loadPrompts()
+	prompts, err := loadPrompts(cfg.Language)
 	if err != nil {
-		return fmt.Errorf(l10n.Pick("load prompts: %v", "chargement des prompts : %v"), err)
+		return fmt.Errorf(l10n.Pick("load prompts: %w", "chargement des prompts : %w"), err)
 	}
 
 	// Launch TUI

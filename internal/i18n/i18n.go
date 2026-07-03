@@ -2,8 +2,10 @@ package i18n
 
 import "fmt"
 
+// Localizer resolves user-facing strings for one supported language.
 type Localizer struct{ Language string }
 
+// New returns a localizer, falling back to English for unsupported languages.
 func New(language string) Localizer {
 	if language != "fr" {
 		language = "en"
@@ -36,6 +38,7 @@ var messages = map[string][2]string{
 	"decision.refine":      {"Reply/refine", "Répondre/raffiner"},
 	"decision.skip":        {"Skip", "Skip"},
 	"decision.quit":        {"Quit", "Quitter"},
+	"run.failed":           {"The run failed.", "L'exécution a échoué."},
 	"fix.name":             {"fix", "la correction"},
 	"tabs.help":            {"(tab/1-3 to switch)", "(tab/1-3 pour changer)"},
 	"checklist.title":      {"📋 Final checklist — failed criteria can be fixed interactively", "📋 Checklist finale — les critères échoués pourront être corrigés interactivement"},
@@ -49,6 +52,7 @@ var messages = map[string][2]string{
 	"merge.failed":         {"⚠ Merge failures:\n%s", "⚠ Merges échoués :\n%s"},
 }
 
+// T translates key and applies optional formatting arguments.
 func (l Localizer) T(key string, args ...any) string {
 	pair, ok := messages[key]
 	if !ok {
@@ -64,6 +68,7 @@ func (l Localizer) T(key string, args ...any) string {
 	return value
 }
 
+// Pick returns en or fr according to the localizer language.
 func (l Localizer) Pick(en, fr string) string {
 	if l.Language == "fr" {
 		return fr

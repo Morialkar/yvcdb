@@ -16,15 +16,9 @@ var (
 			BorderForeground(lipgloss.Color("13")).
 			Padding(0, 1)
 
-	styleHeader = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("13"))
-
 	styleDecisionBox = lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder()).
 				BorderForeground(lipgloss.Color("14")).
 				Padding(0, 2).
 				MarginTop(1)
-
-	styleCheckItem = lipgloss.NewStyle().Padding(0, 1)
 )

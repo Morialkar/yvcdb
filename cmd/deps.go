@@ -5,26 +5,26 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/morialkar/yvcdb/internal/phases"
+	"github.com/Morialkar/yvcdb/internal/phases"
 )
 
-//go:embed prompts
+//go:embed prompts/*/*.md
 var promptsFS embed.FS
 
 func checkProvider(provider string) error {
 	if _, err := exec.LookPath(provider); err != nil {
 		if provider == "codex" {
-			return fmt.Errorf("Codex CLI not found. Install it before using the codex provider")
+			return fmt.Errorf("Codex CLI not found: %w", err)
 		}
-		return fmt.Errorf("Claude CLI not found. Install Claude Code: npm install -g @anthropic-ai/claude-code")
+		return fmt.Errorf("Claude CLI not found; install Claude Code with npm install -g @anthropic-ai/claude-code: %w", err)
 	}
 	return nil
 }
 
-func loadPrompts() (map[string]string, error) {
+func loadPrompts(language string) (map[string]string, error) {
 	prompts := make(map[string]string, len(phases.All))
 	for _, p := range phases.All {
-		data, err := promptsFS.ReadFile("prompts/" + p.PromptFile)
+		data, err := promptsFS.ReadFile("prompts/" + language + "/" + p.PromptFile)
 		if err != nil {
 			return nil, fmt.Errorf("prompt %s: %w", p.PromptFile, err)
 		}

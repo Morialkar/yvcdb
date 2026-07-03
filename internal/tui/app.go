@@ -1,20 +1,36 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	appconfig "github.com/Morialkar/yvcdb/internal/config"
+	"github.com/Morialkar/yvcdb/internal/git"
+	"github.com/Morialkar/yvcdb/internal/i18n"
+	"github.com/Morialkar/yvcdb/internal/phases"
+	"github.com/Morialkar/yvcdb/internal/runner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/morialkar/yvcdb/internal/git"
-	"github.com/morialkar/yvcdb/internal/i18n"
-	"github.com/morialkar/yvcdb/internal/phases"
-	"github.com/morialkar/yvcdb/internal/runner"
+)
+
+const (
+	defaultViewportWidth   = 120
+	defaultViewportHeight  = 20
+	defaultTerminalHeight  = 40
+	viewportWidthMargin    = 6
+	viewportHeightMargin   = 20
+	minimumViewportHeight  = 5
+	runChannelCapacity     = 512
+	modelInputCharLimit    = 100
+	logDirectoryName       = "refactor-logs"
+	temporaryDirectoryName = "yvcdb"
+	sessionTimestampFormat = "20060102_150405"
 )
 
 type appState int
@@ -36,17 +52,17 @@ const (
 	runDecision
 	runApproved
 	runSkipped
+	runFailed
 )
 
 // stages: phases executed sequentially; phases within a stage run in parallel.
 var stages = [][]int{
 	{0},       // diagnostic
 	{1},       // safety
-	{2, 3, 4}, // security + structure + readability en parallèle
+	{2, 3, 4}, // security + structure + readability in parallel
 	{5},       // devil
 }
 
-type startMsg struct{}
 type runLineMsg struct {
 	slot int
 	line string
@@ -55,7 +71,10 @@ type runDoneMsg struct {
 	slot int
 	err  error
 }
-type gitSetupDoneMsg struct{ useGit bool }
+type gitSetupDoneMsg struct {
+	useGit bool
+	err    error
+}
 
 type phaseRun struct {
 	phaseIdx  int
@@ -68,14 +87,17 @@ type phaseRun struct {
 	doneCh    chan error
 	errMsg    string
 	feedback  string
+	cancel    context.CancelFunc
 }
 
+// ChecklistItem tracks a human response to a final quality criterion.
 type ChecklistItem struct {
 	Label   string
 	Checked bool
 	Done    bool
 }
 
+// Model is the Bubble Tea application model.
 type Model struct {
 	ProjectDir string
 	StartPhase int
@@ -109,9 +131,10 @@ type Model struct {
 	statusMsg string
 }
 
+// NewModel constructs the YVCDB application model.
 func NewModel(projectDir string, startPhase int, noGit bool, provider, model string, maxTurns int, language string, prompts map[string]string) Model {
-	ts := time.Now().Format("20060102_150405")
-	vp := viewport.New(120, 20)
+	ts := time.Now().Format(sessionTimestampFormat)
+	vp := viewport.New(defaultViewportWidth, defaultViewportHeight)
 	l10n := i18n.New(language)
 
 	checklistLabels := []string{
@@ -132,13 +155,13 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 	useGit := !noGit && git.IsRepo(projectDir)
 	state := stateModelSelect
 	if strings.TrimSpace(model) == "" {
-		model = "sonnet"
+		model = appconfig.SuggestedModel(provider)
 	}
 	input := textinput.New()
 	input.Prompt = l10n.T("model.prompt")
-	input.Placeholder = "sonnet"
+	input.Placeholder = appconfig.SuggestedModel(provider)
 	input.SetValue(model)
-	input.CharLimit = 100
+	input.CharLimit = modelInputCharLimit
 	input.Width = 48
 	input.Focus()
 
@@ -163,35 +186,34 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 		Prompts:    prompts,
 		l10n:       l10n,
 		timestamp:  ts,
-		logDir:     filepath.Join(projectDir, "refactor-logs"),
+		logDir:     filepath.Join(projectDir, logDirectoryName),
 		stageIdx:   stageIdx,
 		viewport:   vp,
 		input:      input,
 		checkItems: items,
-		termW:      120,
-		termH:      40,
+		termW:      defaultViewportWidth,
+		termH:      defaultTerminalHeight,
 		state:      state,
 		useGit:     useGit,
 	}
 }
 
+// Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return func() tea.Msg { return startMsg{} }
+	return nil
 }
 
+// Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-
-	case startMsg:
-		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.termW = msg.Width
 		m.termH = msg.Height
-		m.viewport.Width = msg.Width - 6
-		m.viewport.Height = m.termH - 20
-		if m.viewport.Height < 5 {
-			m.viewport.Height = 5
+		m.viewport.Width = msg.Width - viewportWidthMargin
+		m.viewport.Height = m.termH - viewportHeightMargin
+		if m.viewport.Height < minimumViewportHeight {
+			m.viewport.Height = minimumViewportHeight
 		}
 		m.refreshViewport()
 		return m, nil
@@ -213,14 +235,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runDoneMsg:
 		if msg.slot < len(m.runs) {
 			r := m.runs[msg.slot]
-			r.status = runDecision
 			if msg.err != nil {
+				r.status = runFailed
 				r.errMsg = msg.err.Error()
+			} else {
+				r.status = runDecision
 			}
+			r.cancel = nil
 		}
 		return m, nil
 
 	case gitSetupDoneMsg:
+		if msg.err != nil {
+			m.statusMsg = styleError.Render("⚠ " + msg.err.Error())
+			return m, nil
+		}
+		m.statusMsg = ""
 		m.useGit = msg.useGit
 		m.state = stateStage
 		return m.startStage()
@@ -247,7 +277,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	if key == "ctrl+c" {
-		return m, tea.Quit
+		return m.quit()
 	}
 
 	switch m.state {
@@ -265,7 +295,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.startStage()
 			}
 		case "esc":
-			return m, tea.Quit
+			return m.quit()
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
@@ -297,10 +327,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "n", "N":
 			return m, func() tea.Msg { return gitSetupDoneMsg{useGit: false} }
 		case "q":
-			return m, tea.Quit
+			return m.quit()
 		}
 
 	case stateStage, stateFixRun:
+		if key == "q" || key == "Q" {
+			return m.quit()
+		}
 		// tab switching between parallel runs
 		switch key {
 		case "tab":
@@ -319,6 +352,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// decision keys apply to the currently viewed run
+		if m.activeRun < len(m.runs) && m.runs[m.activeRun].status == runFailed {
+			switch key {
+			case "s", "S":
+				return m.skipRun(m.activeRun)
+			case "q", "Q":
+				return m.quit()
+			}
+		}
+
 		if m.activeRun < len(m.runs) && m.runs[m.activeRun].status == runDecision {
 			switch key {
 			case "o", "O", "y", "Y":
@@ -334,7 +376,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case "s", "S":
 				return m.skipRun(m.activeRun)
 			case "q", "Q":
-				return m, tea.Quit
+				return m.quit()
 			}
 		}
 
@@ -354,7 +396,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.checkItems[m.checkIdx].Done = true
 			return m.nextCheck()
 		case "q":
-			return m, tea.Quit
+			return m.quit()
 		}
 
 	case stateDone:
@@ -364,15 +406,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.startFixRun()
 			}
 		case "q", "enter":
-			return m, tea.Quit
+			return m.quit()
 		}
 	}
 
 	return m, nil
 }
 
+func (m Model) quit() (tea.Model, tea.Cmd) {
+	for _, run := range m.runs {
+		if run.cancel != nil {
+			run.cancel()
+		}
+	}
+	return m, tea.Quit
+}
+
 // ─── Views ───────────────────────────────────────────────────────────────────
 
+// View implements tea.Model.
 func (m Model) View() string {
 	var b strings.Builder
 
@@ -427,7 +479,7 @@ func (m Model) phaseTitle(id string) string {
 	return m.l10n.Pick(title[0], title[1])
 }
 
-func (m Model) phaseState(phaseIdx int) (icon string, active bool, iter int) {
+func (m Model) phaseState(phaseIdx int) (state string, iter int) {
 	// completed stage?
 	for si, stage := range stages {
 		for _, pi := range stage {
@@ -435,26 +487,26 @@ func (m Model) phaseState(phaseIdx int) (icon string, active bool, iter int) {
 				continue
 			}
 			if si < m.stageIdx {
-				return "done", false, 0
+				return "done", 0
 			}
 			if si > m.stageIdx {
-				return "pending", false, 0
+				return "pending", 0
 			}
 			// current stage — look up run
 			for _, r := range m.runs {
 				if r.phaseIdx == phaseIdx {
 					switch r.status {
 					case runApproved, runSkipped:
-						return "done", false, 0
+						return "done", 0
 					default:
-						return "active", true, r.iteration
+						return "active", r.iteration
 					}
 				}
 			}
-			return "pending", false, 0
+			return "pending", 0
 		}
 	}
-	return "pending", false, 0
+	return "pending", 0
 }
 
 func (m Model) renderPipeline() string {
@@ -465,7 +517,7 @@ func (m Model) renderPipeline() string {
 		c := lipgloss.NewStyle().Foreground(p.Color)
 		label := fmt.Sprintf("%s — %s", p.Label, m.phaseTitle(p.ID))
 
-		st, _, iter := m.phaseState(i)
+		st, iter := m.phaseState(i)
 		var icon, line string
 		switch st {
 		case "done":
@@ -525,6 +577,8 @@ func (m Model) renderTabs() string {
 			status = styleSuccess.Render("✓")
 		case runSkipped:
 			status = styleDim.Render("s")
+		case runFailed:
+			status = styleError.Render("!")
 		}
 		label := fmt.Sprintf("[%d] %s %s", i+1, p.Label, status)
 		if i == m.activeRun {
@@ -565,7 +619,7 @@ func (m Model) renderStage() string {
 
 	out := m.renderTabs() + header + "\n" + info + "\n" + vpStyle.Render(m.viewport.View()) + "\n"
 
-	if r.status == runDecision {
+	if r.status == runDecision || r.status == runFailed {
 		out += m.renderDecision(r)
 	}
 	if r.errMsg != "" {
@@ -575,6 +629,11 @@ func (m Model) renderStage() string {
 }
 
 func (m Model) renderDecision(r *phaseRun) string {
+	if r.status == runFailed {
+		return styleDecisionBox.Width(m.termW - 8).Render(
+			styleError.Render(m.l10n.T("run.failed")) + "\n  " + styleCyan.Render("[s]") + " " + m.l10n.T("decision.skip") + "   " + styleError.Render("[q]") + " " + m.l10n.T("decision.quit"),
+		)
+	}
 	var name string
 	if m.state == stateFixRun {
 		name = m.l10n.T("fix.name")
@@ -659,7 +718,7 @@ func (m Model) startStage() (Model, tea.Cmd) {
 	parallel := len(stage) > 1
 	var cmds []tea.Cmd
 
-	for slot, phaseIdx := range stage {
+	for _, phaseIdx := range stage {
 		// respect --phase start point within the stage
 		if phaseIdx < m.StartPhase {
 			continue
@@ -674,22 +733,34 @@ func (m Model) startStage() (Model, tea.Cmd) {
 
 		if m.useGit {
 			if parallel {
-				wtDir := filepath.Join(os.TempDir(), "yvcdb", m.timestamp, p.ID)
+				wtDir := filepath.Join(os.TempDir(), temporaryDirectoryName, m.timestamp, p.ID)
 				if err := git.WorktreeAdd(m.ProjectDir, wtDir, r.branch); err != nil {
+					r.workDir = ""
+					r.status = runFailed
 					r.errMsg = err.Error()
 				} else {
 					r.workDir = wtDir
 				}
 			} else {
-				if !git.BranchExists(m.ProjectDir, r.branch) {
-					_ = git.CreateBranch(m.ProjectDir, r.branch)
+				branchExists, err := git.BranchExists(m.ProjectDir, r.branch)
+				if err != nil {
+					r.workDir = ""
+					r.status = runFailed
+					r.errMsg = err.Error()
+				} else if !branchExists {
+					if err := git.CreateBranch(m.ProjectDir, r.branch); err != nil {
+						r.workDir = ""
+						r.status = runFailed
+						r.errMsg = err.Error()
+					}
 				}
 			}
 		}
 
 		m.runs = append(m.runs, r)
-		cmds = append(cmds, m.launchRun(len(m.runs)-1))
-		_ = slot
+		if r.status != runFailed {
+			cmds = append(cmds, m.launchRun(len(m.runs)-1))
+		}
 	}
 
 	if len(m.runs) == 0 {
@@ -716,12 +787,12 @@ func (m *Model) launchRun(slot int) tea.Cmd {
 	}
 	systemPrompt += m.l10n.Pick("\n\nAlways communicate your analysis and final result in English.", "\n\nCommunique toujours ton analyse et ton résultat final en français.")
 
-	r.lineCh = make(chan string, 512)
+	r.lineCh = make(chan string, runChannelCapacity)
 	r.doneCh = make(chan error, 1)
 	r.lines = nil
 	r.status = runActive
 
-	runner.RunPhase(r.workDir, m.logDir, m.timestamp, p.ID, r.iteration, systemPrompt, runner.Options{
+	r.cancel = runner.RunPhase(r.workDir, m.logDir, m.timestamp, p.ID, r.iteration, systemPrompt, runner.Options{
 		Provider: m.Provider, Model: m.AgentModel, MaxTurns: m.MaxTurns, Feedback: r.feedback, Language: m.Language,
 	}, r.lineCh, r.doneCh)
 	r.feedback = ""
@@ -741,16 +812,18 @@ func waitForRun(slot int, lineCh chan string, doneCh chan error) tea.Cmd {
 func (m Model) approveRun(slot int) (Model, tea.Cmd) {
 	r := m.runs[slot]
 	if m.state == stateFixRun {
-		if m.useGit && git.HasChanges(r.workDir) {
-			_ = git.CommitAll(r.workDir, fmt.Sprintf("refactor(fix): interactive fix round %d — YVCDB", m.fixRound))
+		if err := m.commitChanges(r.workDir, fmt.Sprintf("refactor(fix): interactive fix round %d — YVCDB", m.fixRound)); err != nil {
+			r.errMsg = err.Error()
+			return m, nil
 		}
 		m.state = stateDone
 		return m, nil
 	}
 
 	p := phases.All[r.phaseIdx]
-	if m.useGit && git.HasChanges(r.workDir) {
-		_ = git.CommitAll(r.workDir, fmt.Sprintf("refactor(%s): changes applied by YVCDB", p.Label))
+	if err := m.commitChanges(r.workDir, fmt.Sprintf("refactor(%s): changes applied by YVCDB", p.Label)); err != nil {
+		r.errMsg = err.Error()
+		return m, nil
 	}
 	r.status = runApproved
 	return m.checkStageDone()
@@ -771,12 +844,13 @@ func (m Model) reiterateRun(slot int) (Model, tea.Cmd) {
 
 func (m Model) reiterateRunWithFeedback(slot int, feedback string) (Model, tea.Cmd) {
 	r := m.runs[slot]
-	if m.useGit && git.HasChanges(r.workDir) {
-		label := "fix"
-		if m.state != stateFixRun {
-			label = phases.All[r.phaseIdx].Label
-		}
-		_ = git.CommitAll(r.workDir, fmt.Sprintf("refactor(%s): iter%d — YVCDB", label, r.iteration))
+	label := "fix"
+	if m.state != stateFixRun {
+		label = phases.All[r.phaseIdx].Label
+	}
+	if err := m.commitChanges(r.workDir, fmt.Sprintf("refactor(%s): iter%d — YVCDB", label, r.iteration)); err != nil {
+		r.errMsg = err.Error()
+		return m, nil
 	}
 	r.iteration++
 	r.feedback = feedback
@@ -789,12 +863,26 @@ func (m Model) reiterateRunWithFeedback(slot int, feedback string) (Model, tea.C
 	return m, cmd
 }
 
+func (m Model) commitChanges(dir, message string) error {
+	if !m.useGit {
+		return nil
+	}
+	hasChanges, err := git.HasChanges(dir)
+	if err != nil {
+		return err
+	}
+	if !hasChanges {
+		return nil
+	}
+	return git.CommitAll(dir, message)
+}
+
 func (m Model) checkStageDone() (Model, tea.Cmd) {
 	for _, r := range m.runs {
 		if r.status != runApproved && r.status != runSkipped {
 			// switch view to a run still needing attention
 			for i, other := range m.runs {
-				if other.status == runDecision {
+				if other.status == runDecision || other.status == runFailed {
 					m.activeRun = i
 					m.refreshViewport()
 					break
@@ -810,16 +898,15 @@ func (m Model) checkStageDone() (Model, tea.Cmd) {
 		var problems []string
 		baseBranch, branchErr := git.CurrentBranch(m.ProjectDir)
 		if branchErr != nil {
-			problems = append(problems, branchErr.Error())
+			m.statusMsg = styleError.Render(m.l10n.T("merge.failed", branchErr.Error()))
+			return m, nil
 		}
 		for _, r := range m.runs {
-			if r.workDir != m.ProjectDir {
+			if r.workDir != "" && r.workDir != m.ProjectDir {
 				if r.status == runApproved {
-					if branchErr == nil {
-						if err := git.Rebase(r.workDir, baseBranch); err != nil {
-							problems = append(problems, err.Error())
-							continue
-						}
+					if err := git.Rebase(r.workDir, baseBranch); err != nil {
+						problems = append(problems, err.Error())
+						continue
 					}
 					if err := git.WorktreeRemove(m.ProjectDir, r.workDir); err != nil {
 						problems = append(problems, err.Error())
@@ -835,6 +922,7 @@ func (m Model) checkStageDone() (Model, tea.Cmd) {
 		}
 		if len(problems) > 0 {
 			m.statusMsg = styleError.Render(m.l10n.T("merge.failed", strings.Join(problems, "\n")))
+			return m, nil
 		}
 	}
 
@@ -885,10 +973,10 @@ func (m Model) restartFixRun(feedback string) (Model, tea.Cmd) {
 	)
 
 	r := &phaseRun{
-		phaseIdx:  len(phases.All) - 1, // devil, pour la couleur
+		phaseIdx:  len(phases.All) - 1, // use the devil phase color
 		iteration: m.fixRound,
 		workDir:   m.ProjectDir,
-		lineCh:    make(chan string, 512),
+		lineCh:    make(chan string, runChannelCapacity),
 		doneCh:    make(chan error, 1),
 		status:    runActive,
 		feedback:  feedback,
@@ -898,7 +986,7 @@ func (m Model) restartFixRun(feedback string) (Model, tea.Cmd) {
 	m.state = stateFixRun
 	m.refreshViewport()
 
-	runner.RunPhase(r.workDir, m.logDir, m.timestamp, "fix", m.fixRound, systemPrompt, runner.Options{
+	r.cancel = runner.RunPhase(r.workDir, m.logDir, m.timestamp, "fix", m.fixRound, systemPrompt, runner.Options{
 		Provider: m.Provider, Model: m.AgentModel, MaxTurns: m.MaxTurns, Feedback: feedback, Language: m.Language,
 	}, r.lineCh, r.doneCh)
 	return m, waitForRun(0, r.lineCh, r.doneCh)
@@ -907,8 +995,7 @@ func (m Model) restartFixRun(feedback string) (Model, tea.Cmd) {
 func (m Model) doGitInit() tea.Cmd {
 	return func() tea.Msg {
 		if err := git.Init(m.ProjectDir); err != nil {
-			fmt.Fprintf(os.Stderr, "git init: %v\n", err)
-			return gitSetupDoneMsg{useGit: false}
+			return gitSetupDoneMsg{useGit: false, err: fmt.Errorf("initialize git: %w", err)}
 		}
 		return gitSetupDoneMsg{useGit: true}
 	}

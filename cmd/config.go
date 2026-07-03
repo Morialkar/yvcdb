@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	appconfig "github.com/morialkar/yvcdb/internal/config"
+	appconfig "github.com/Morialkar/yvcdb/internal/config"
 )
 
 var configCmd = &cobra.Command{
@@ -28,7 +28,7 @@ func runConfig(_ *cobra.Command, _ []string) error {
 	fmt.Printf("Language [en/fr] (%s): ", cfg.Language)
 	language, err := reader.ReadString('\n')
 	if err != nil {
-		return err
+		return fmt.Errorf("read language: %w", err)
 	}
 	language = strings.ToLower(strings.TrimSpace(language))
 	if language != "" {
@@ -41,7 +41,7 @@ func runConfig(_ *cobra.Command, _ []string) error {
 	fmt.Printf("AI CLI provider [claude/codex] (%s): ", cfg.Provider)
 	provider, err := reader.ReadString('\n')
 	if err != nil {
-		return err
+		return fmt.Errorf("read provider: %w", err)
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider != "" {
@@ -57,7 +57,7 @@ func runConfig(_ *cobra.Command, _ []string) error {
 	fmt.Printf("Default %s model (%s): ", cfg.Provider, cfg.Model)
 	model, err := reader.ReadString('\n')
 	if err != nil {
-		return err
+		return fmt.Errorf("read model: %w", err)
 	}
 	if model = strings.TrimSpace(model); model != "" {
 		cfg.Model = model
@@ -66,7 +66,10 @@ func runConfig(_ *cobra.Command, _ []string) error {
 	if err := appconfig.Save(cfg); err != nil {
 		return fmt.Errorf("save configuration: %w", err)
 	}
-	path, _ := appconfig.Path()
+	path, err := appconfig.Path()
+	if err != nil {
+		return fmt.Errorf("resolve saved configuration path: %w", err)
+	}
 	fmt.Printf("Configuration saved to %s\n", path)
 	fmt.Printf("Language: %s\nProvider: %s\nModel: %s\n", cfg.Language, cfg.Provider, cfg.Model)
 	return nil

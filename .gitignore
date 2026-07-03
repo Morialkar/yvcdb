@@ -12,7 +12,7 @@
 coverage.*
 *.coverprofile
 
-# TVCMM generated output
+# YVCDB generated output
 /refactor-logs/
 
 # Local environment and editor files

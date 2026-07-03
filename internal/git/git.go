@@ -1,16 +1,19 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 )
 
+// IsRepo reports whether dir belongs to a Git repository.
 func IsRepo(dir string) bool {
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "--git-dir")
 	return cmd.Run() == nil
 }
 
+// Init initializes a repository and creates a snapshot commit.
 func Init(dir string) error {
 	cmds := [][]string{
 		{"git", "-C", dir, "init"},
@@ -26,6 +29,7 @@ func Init(dir string) error {
 	return nil
 }
 
+// CreateBranch creates and checks out branch in dir.
 func CreateBranch(dir, branch string) error {
 	out, err := exec.Command("git", "-C", dir, "checkout", "-b", branch).CombinedOutput()
 	if err != nil {
@@ -34,20 +38,34 @@ func CreateBranch(dir, branch string) error {
 	return nil
 }
 
-func BranchExists(dir, branch string) bool {
+// BranchExists reports whether a local branch exists.
+func BranchExists(dir, branch string) (bool, error) {
 	cmd := exec.Command("git", "-C", dir, "show-ref", "--quiet", "refs/heads/"+branch)
-	return cmd.Run() == nil
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("check branch %s: %w", branch, err)
 }
 
-func HasChanges(dir string) bool {
+// HasChanges reports whether the working tree contains tracked or untracked changes.
+func HasChanges(dir string) (bool, error) {
 	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
-	return err != nil || len(strings.TrimSpace(string(out))) > 0
+	if err != nil {
+		return false, fmt.Errorf("git status: %w", err)
+	}
+	return len(strings.TrimSpace(string(out))) > 0, nil
 }
 
+// CurrentBranch returns the currently checked-out branch.
 func CurrentBranch(dir string) (string, error) {
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolve current branch: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -61,20 +79,11 @@ func WorktreeAdd(repoDir, worktreeDir, branch string) error {
 	return nil
 }
 
+// WorktreeRemove forcibly removes a Git worktree.
 func WorktreeRemove(repoDir, worktreeDir string) error {
 	out, err := exec.Command("git", "-C", repoDir, "worktree", "remove", "--force", worktreeDir).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("worktree remove: %w\n%s", err, out)
-	}
-	return nil
-}
-
-// Merge merges branch into the current branch. On conflict the merge is aborted.
-func Merge(dir, branch string) error {
-	out, err := exec.Command("git", "-C", dir, "merge", "--no-edit", branch).CombinedOutput()
-	if err != nil {
-		_ = exec.Command("git", "-C", dir, "merge", "--abort").Run()
-		return fmt.Errorf("merge %s failed (possible conflicts) — manual merge required:\n%s", branch, out)
 	}
 	return nil
 }
@@ -84,12 +93,16 @@ func Merge(dir, branch string) error {
 func Rebase(worktreeDir, targetBranch string) error {
 	out, err := exec.Command("git", "-C", worktreeDir, "rebase", targetBranch).CombinedOutput()
 	if err != nil {
-		_ = exec.Command("git", "-C", worktreeDir, "rebase", "--abort").Run()
-		return fmt.Errorf("rebase onto %s failed (worktree preserved at %s):\n%s", targetBranch, worktreeDir, out)
+		rebaseErr := fmt.Errorf("rebase onto %s failed (worktree preserved at %s): %w\n%s", targetBranch, worktreeDir, err, out)
+		if abortErr := exec.Command("git", "-C", worktreeDir, "rebase", "--abort").Run(); abortErr != nil {
+			return errors.Join(rebaseErr, fmt.Errorf("abort rebase: %w", abortErr))
+		}
+		return rebaseErr
 	}
 	return nil
 }
 
+// MergeFastForward fast-forwards the current branch to branch.
 func MergeFastForward(dir, branch string) error {
 	out, err := exec.Command("git", "-C", dir, "merge", "--ff-only", branch).CombinedOutput()
 	if err != nil {
@@ -98,6 +111,7 @@ func MergeFastForward(dir, branch string) error {
 	return nil
 }
 
+// CommitAll stages all changes and creates a commit with message.
 func CommitAll(dir, message string) error {
 	add := exec.Command("git", "-C", dir, "add", "-A")
 	if out, err := add.CombinedOutput(); err != nil {

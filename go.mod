@@ -1,4 +1,4 @@
-module github.com/morialkar/yvcdb
+module github.com/Morialkar/yvcdb
 
 go 1.26.4
 
