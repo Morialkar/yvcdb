@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # push the coverage badge to the badges branch
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify module files are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector and coverage
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Exclude entry-point mains from coverage
+        run: |
+          grep -v -E '^github\.com/Morialkar/yvcdb/(main\.go|cmd/tvcmm/)' coverage.out > coverage.filtered.out
+          mv coverage.filtered.out coverage.out
+
+      - name: Enforce coverage floor
+        env:
+          MIN_COVERAGE: "93.0"
+        run: |
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ { gsub(/%/, "", $3); print $3 }')"
+          echo "Total coverage: ${total}% (minimum: ${MIN_COVERAGE}%)"
+          awk -v total="$total" -v minimum="$MIN_COVERAGE" 'BEGIN { exit !(total + 0 >= minimum + 0) }'
+
+      - name: Publish coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ { gsub(/%/, "", $3); print $3 }')"
+          color="e05d44"
+          awk -v t="$total" 'BEGIN { exit !(t >= 80) }' && color="dfb317"
+          awk -v t="$total" 'BEGIN { exit !(t >= 90) }' && color="97ca00"
+          awk -v t="$total" 'BEGIN { exit !(t >= 95) }' && color="4c1"
+          cat > coverage.svg << EOF
+          <svg xmlns="http://www.w3.org/2000/svg" width="116" height="20" role="img" aria-label="coverage: ${total}%">
+            <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+            <clipPath id="r"><rect width="116" height="20" rx="3" fill="#fff"/></clipPath>
+            <g clip-path="url(#r)">
+              <rect width="65" height="20" fill="#555"/>
+              <rect x="65" width="51" height="20" fill="#${color}"/>
+              <rect width="116" height="20" fill="url(#s)"/>
+            </g>
+            <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="110" text-rendering="geometricPrecision">
+              <text x="335" y="140" transform="scale(.1)" fill="#010101" fill-opacity=".3" textLength="550">coverage</text>
+              <text x="335" y="130" transform="scale(.1)" textLength="550">coverage</text>
+              <text x="895" y="140" transform="scale(.1)" fill="#010101" fill-opacity=".3" textLength="410">${total}%</text>
+              <text x="895" y="130" transform="scale(.1)" textLength="410">${total}%</text>
+            </g>
+          </svg>
+          EOF
+          badge_dir="$(mktemp -d)"
+          cp coverage.svg "$badge_dir/"
+          cd "$badge_dir"
+          git init -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add coverage.svg
+          git commit -m "chore: update coverage badge"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: Linux
+            runner: ubuntu-latest
+          - os: macOS
+            runner: macos-latest
+          - os: Windows
+            runner: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build commands
+        run: go build ./...
