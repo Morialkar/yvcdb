@@ -208,6 +208,10 @@ The release workflow reruns CI, builds `amd64` and `arm64` archives for macOS, L
 
 The localized phase prompts are embedded from `cmd/prompts/en/` and `cmd/prompts/fr/`. Core orchestration lives in `internal/tui`, provider execution in `internal/runner`, and Git operations in `internal/git`.
 
+## How this tool was built
+
+YVCDB was developed with two AI assistants — Claude and Codex — following what I call the **AFTER** methodology: **Architect First, Test Everything Rigorously**. The human designs the architecture and workflow up front (phases, Git strategy, approval loops), the assistants implement against that design, and every piece of behavior is then locked in with rigorous tests — including error paths, race conditions, and deadlocks, several of which were caught by the tests themselves. An article detailing the methodology is coming soon.
+
 ## License
 
 YVCDB is licensed under the [MIT License](LICENSE).

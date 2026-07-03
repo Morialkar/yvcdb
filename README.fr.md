@@ -208,6 +208,10 @@ Le workflow de release relance la CI, construit les archives `amd64` et `arm64` 
 
 Les prompts de phase localisés sont embarqués depuis `cmd/prompts/en/` et `cmd/prompts/fr/`. L'orchestration principale vit dans `internal/tui`, l'exécution des fournisseurs dans `internal/runner`, et les opérations Git dans `internal/git`.
 
+## Comment cet outil a été construit
+
+YVCDB a été développé avec deux assistants IA — Claude et Codex — selon ce que j'appelle la méthodologie **AFTER** : **Architect First, Test Everything Rigorously**. L'humain conçoit l'architecture et le workflow en amont (phases, stratégie Git, boucles d'approbation), les assistants implémentent selon ce design, puis chaque comportement est verrouillé par des tests rigoureux — incluant les chemins d'erreur, les courses et les deadlocks, dont plusieurs ont été attrapés par les tests eux-mêmes. Un article détaillant la méthodologie arrive bientôt.
+
 ## Licence
 
 YVCDB est distribué sous la [licence MIT](LICENSE).
