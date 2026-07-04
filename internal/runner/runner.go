@@ -12,12 +12,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Morialkar/yvcdb/internal/git"
 )
 
 const (
 	// DefaultMaxTurns is the Claude turn limit used when no positive limit is supplied.
 	DefaultMaxTurns          = 20
 	DefaultInactivityTimeout = 10 * time.Minute
+	promptFileExcludePattern = ".yvcdb_*.md"
 	previousLogLines         = 100
 	maxJSONEventBytes        = 1024 * 1024
 	toolInputRunes           = 120
@@ -350,6 +353,10 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 				return
 			}
 			promptFilePath = promptFile.Name()
+			if _, err := git.EnsureInfoExcludeEntry(projectDir, promptFileExcludePattern); err != nil {
+				failBeforeStart(fmt.Errorf("exclude prompt files: %w", err))
+				return
+			}
 			if notice := strings.TrimSpace(selected.startupNotice(opts.Language)); notice != "" {
 				if _, err := fmt.Fprintln(f, notice); err != nil {
 					failBeforeStart(fmt.Errorf("write startup notice: %w", err))

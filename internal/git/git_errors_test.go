@@ -177,3 +177,29 @@ func TestRebaseFailureWithNoRebaseInProgress(t *testing.T) {
 		t.Fatalf("expected joined abort error, got: %v", err)
 	}
 }
+
+func TestCommitAllRespectsPromptFileExclude(t *testing.T) {
+	dir := initRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "source.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(dir, ".yvcdb_phase_iter1_abcd.md")
+	if err := os.WriteFile(promptPath, []byte("system prompt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*.md"); err != nil {
+		t.Fatal(err)
+	} else if !added {
+		t.Fatal("expected exclusion entry to be added")
+	}
+	if err := CommitAll(dir, "phase snapshot"); err != nil {
+		t.Fatal(err)
+	}
+	tree := runGitOutput(t, dir, "ls-tree", "-r", "--name-only", "HEAD")
+	if !strings.Contains(tree, "source.go") {
+		t.Fatalf("expected committed source file, got: %q", tree)
+	}
+	if strings.Contains(tree, ".yvcdb_phase_iter1_abcd.md") {
+		t.Fatalf("prompt file should not be committed, tree: %q", tree)
+	}
+}

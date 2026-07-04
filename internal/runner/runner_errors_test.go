@@ -259,6 +259,65 @@ sleep 2
 	}
 }
 
+func TestRunPhaseCancelDeletesPromptFile(t *testing.T) {
+	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := t.TempDir()
+	writeExecutable(t, binDir, "opencode", `#!/bin/sh
+set -eu
+prompt_file=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		run)
+			shift
+			;;
+		--format)
+			shift 2
+			;;
+		--auto)
+			shift
+			;;
+		-f|--file)
+			prompt_file=$2
+			shift 2
+			;;
+		--model)
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+printf '%s\n' "$prompt_file" > prompt-path.txt
+sleep 2
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	lineCh := make(chan string, 64)
+	doneCh := make(chan error, 1)
+	cancel := RunPhase(projectDir, logDir, "cancel", "phase", 1, "system prompt", Options{
+		Provider:          "opencode",
+		Language:          "en",
+		InactivityTimeout: 5 * time.Second,
+	}, lineCh, doneCh)
+	waitForFile(t, filepath.Join(projectDir, "prompt-path.txt"))
+	cancel()
+	for range lineCh {
+	}
+	if err := <-doneCh; err != nil {
+		t.Fatalf("cancellation should succeed, got: %v", err)
+	}
+	promptPathBytes, err := os.ReadFile(filepath.Join(projectDir, "prompt-path.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptPath := strings.TrimSpace(string(promptPathBytes))
+	if _, statErr := os.Stat(promptPath); !os.IsNotExist(statErr) {
+		t.Fatalf("prompt file should be deleted after cancellation, stat err=%v", statErr)
+	}
+}
+
 func TestRunPhaseWatchdogResetsOnActivity(t *testing.T) {
 	binDir := t.TempDir()
 	writeExecutable(t, binDir, "opencode", `#!/bin/sh
@@ -316,4 +375,15 @@ func runPhaseWithOptions(t *testing.T, projectDir, logDir, timestamp string, ite
 		lines = append(lines, line)
 	}
 	return lines, <-doneCh
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("file did not appear: %s", path)
 }
