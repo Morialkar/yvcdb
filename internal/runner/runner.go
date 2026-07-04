@@ -183,12 +183,28 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			doneCh <- fmt.Errorf("create log: %w", err)
 			return
 		}
-		failBeforeStart := func(runErr error) {
+		promptFilePath := ""
+		cleanupPromptFile := func() error {
+			if promptFilePath == "" {
+				return nil
+			}
+			if err := os.Remove(promptFilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("remove prompt file: %w", err)
+			}
+			return nil
+		}
+		finish := func(runErr error) {
+			if cleanupErr := cleanupPromptFile(); cleanupErr != nil {
+				runErr = errors.Join(runErr, cleanupErr)
+			}
 			if closeErr := f.Close(); closeErr != nil {
 				runErr = errors.Join(runErr, fmt.Errorf("close event log: %w", closeErr))
 			}
 			close(lineCh)
 			doneCh <- runErr
+		}
+		failBeforeStart := func(runErr error) {
+			finish(runErr)
 		}
 		projectLabel := "Project"
 		if opts.Language == "fr" {
@@ -233,7 +249,33 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			maxTurns = DefaultMaxTurns
 		}
 		selected := selectProvider(opts.Provider)
-		cmd := selected.buildCommand(ctx, projectDir, systemPrompt, userPrompt, opts.Model, maxTurns)
+		if selected.needsPromptFile() {
+			promptFile, err := os.CreateTemp(projectDir, fmt.Sprintf(".yvcdb_%s_iter%d_*.md", phaseID, iteration))
+			if err != nil {
+				failBeforeStart(fmt.Errorf("create prompt file: %w", err))
+				return
+			}
+			if _, err := promptFile.WriteString(systemPrompt); err != nil {
+				_ = promptFile.Close()
+				promptFilePath = promptFile.Name()
+				failBeforeStart(fmt.Errorf("write prompt file: %w", err))
+				return
+			}
+			if err := promptFile.Close(); err != nil {
+				promptFilePath = promptFile.Name()
+				failBeforeStart(fmt.Errorf("close prompt file: %w", err))
+				return
+			}
+			promptFilePath = promptFile.Name()
+			if notice := strings.TrimSpace(selected.startupNotice(opts.Language)); notice != "" {
+				if _, err := fmt.Fprintln(f, notice); err != nil {
+					failBeforeStart(fmt.Errorf("write startup notice: %w", err))
+					return
+				}
+				lineCh <- notice
+			}
+		}
+		cmd := selected.buildCommand(ctx, projectDir, systemPrompt, userPrompt, opts.Model, promptFilePath, maxTurns)
 		cmd.Dir = projectDir
 
 		stdout, err := cmd.StdoutPipe()
@@ -304,8 +346,6 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		// finish reading both pipes before Wait: Wait closes them
 		stderrWG.Wait()
 		waitErr := cmd.Wait()
-		closeErr := f.Close()
-		close(lineCh)
 
 		var runErr error
 		if waitErr != nil && !selected.waitSucceeded(waitErr, ctx.Err(), maxTurnsReached) {
@@ -320,10 +360,7 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		if logErr != nil {
 			runErr = errors.Join(runErr, logErr)
 		}
-		if closeErr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("close event log: %w", closeErr))
-		}
-		doneCh <- runErr
+		finish(runErr)
 	}()
 	return cancel
 }

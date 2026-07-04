@@ -10,7 +10,7 @@ import (
 
 type codexProvider struct{}
 
-func (codexProvider) buildCommand(ctx context.Context, projectDir, systemPrompt, userPrompt, model string, maxTurns int) *exec.Cmd {
+func (codexProvider) buildCommand(ctx context.Context, projectDir, systemPrompt, userPrompt, model, promptFilePath string, maxTurns int) *exec.Cmd {
 	prompt := systemPrompt + "\n\n---\n\n" + userPrompt
 	args := []string{"-a", "never", "exec", "--json", "--color", "never", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "-C", projectDir}
 	if model = strings.TrimSpace(model); model != "" {
@@ -34,3 +34,7 @@ func (codexProvider) parseLine(raw, language string) ([]string, bool) {
 func (codexProvider) waitSucceeded(waitErr, ctxErr error, maxTurnsReached bool) bool {
 	return waitErr == nil || errors.Is(ctxErr, context.Canceled)
 }
+
+func (codexProvider) needsPromptFile() bool { return false }
+
+func (codexProvider) startupNotice(language string) string { return "" }

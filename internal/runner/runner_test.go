@@ -79,6 +79,43 @@ func TestCodexEventToLines(t *testing.T) {
 	}
 }
 
+func TestOpenCodeEventToLines(t *testing.T) {
+	p := opencodeProvider{}
+	raws := []string{
+		`{"type":"text","part":{"text":"  OpenCode analysis  "}}`,
+		`{"type":"tool_use","part":{"tool":"read","state":{"status":"completed"}}}`,
+		`{"type":"step_start"}`,
+		`{"type":"step_finish","part":{"tokens":{"input":1},"cost":0}}`,
+	}
+	var got []string
+	for _, raw := range raws {
+		lines, _ := p.parseLine(raw, "en")
+		got = append(got, lines...)
+	}
+	want := []string{"OpenCode analysis", "  ⚙  read"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestOpenCodeEventEdgeCasesAreIgnored(t *testing.T) {
+	p := opencodeProvider{}
+	raws := []string{
+		`{"type":"unknown"}`,
+		`not json`,
+		`{"type":"text","part":{"text":"  keep going  "}}`,
+		`{"type":"step_start"}`,
+	}
+	var got []string
+	for _, raw := range raws {
+		lines, _ := p.parseLine(raw, "en")
+		got = append(got, lines...)
+	}
+	if !reflect.DeepEqual(got, []string{"keep going"}) {
+		t.Fatalf("unexpected lines: %#v", got)
+	}
+}
+
 func TestRunPhaseWithClaudeAndCodex(t *testing.T) {
 	binDir := t.TempDir()
 	writeExecutable(t, binDir, "claude", `#!/bin/sh
@@ -119,6 +156,80 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"C
 	}
 }
 
+func TestRunPhaseWithOpenCodePromptFileLifecycle(t *testing.T) {
+	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := filepath.Join(t.TempDir(), "logs")
+	systemPrompt := "SYSTEM PROMPT\nwith multiple lines\nand details."
+	writeExecutable(t, binDir, "opencode", `#!/bin/sh
+set -eu
+prompt_file=""
+auto=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+		run)
+			shift
+			;;
+		--format)
+			shift 2
+			;;
+		--auto)
+			auto=1
+			shift
+			;;
+		-f|--file)
+			prompt_file=$2
+			shift 2
+			;;
+		--model)
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+if [ "$auto" -ne 1 ]; then
+	exit 42
+fi
+printf '%s\n' "$prompt_file" > prompt-path.txt
+cp "$prompt_file" prompt-copy.txt
+printf '%s\n' '{"type":"text","part":{"text":"opencode analysis"}}'
+printf '%s\n' '{"type":"step_start"}'
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	lines, err := runPhaseWithPrompt(t, projectDir, logDir, "opencode-session", 1, systemPrompt, Options{Provider: "opencode", Language: "en", Model: "custom/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "OpenCode is running with auto-approved permissions.") {
+		t.Fatalf("missing startup notice: %q", joined)
+	}
+	if !strings.Contains(joined, "opencode analysis") {
+		t.Fatalf("missing analysis line: %q", joined)
+	}
+	promptPathBytes, err := os.ReadFile(filepath.Join(projectDir, "prompt-path.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptPath := strings.TrimSpace(string(promptPathBytes))
+	if filepath.Dir(promptPath) != projectDir {
+		t.Fatalf("prompt file not created in project dir: %s", promptPath)
+	}
+	if _, err := os.Stat(promptPath); !os.IsNotExist(err) {
+		t.Fatalf("prompt file should be deleted after completion, stat err=%v", err)
+	}
+	promptCopy, err := os.ReadFile(filepath.Join(projectDir, "prompt-copy.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(promptCopy) != systemPrompt {
+		t.Fatalf("prompt file content mismatch: %q", promptCopy)
+	}
+}
+
 func TestRunPhaseReportsFailuresAndAllowsMaxTurns(t *testing.T) {
 	binDir := t.TempDir()
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -142,6 +253,19 @@ exit 1
 	if _, err := runTestPhase(projectDir, logDir, "claude-failure", "claude", 1); err == nil {
 		t.Fatal("expected non-max-turn Claude exit to fail")
 	}
+}
+
+func runPhaseWithPrompt(t *testing.T, projectDir, logDir, timestamp string, iteration int, systemPrompt string, opts Options) ([]string, error) {
+	t.Helper()
+	lineCh := make(chan string, 64)
+	doneCh := make(chan error, 1)
+	cancel := RunPhase(projectDir, logDir, timestamp, "phase", iteration, systemPrompt, opts, lineCh, doneCh)
+	defer cancel()
+	var lines []string
+	for line := range lineCh {
+		lines = append(lines, line)
+	}
+	return lines, <-doneCh
 }
 
 func TestRunPhaseForwardsRawOutputAndStderr(t *testing.T) {

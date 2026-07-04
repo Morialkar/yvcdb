@@ -11,7 +11,7 @@ import (
 
 type claudeProvider struct{}
 
-func (claudeProvider) buildCommand(ctx context.Context, projectDir, systemPrompt, userPrompt, model string, maxTurns int) *exec.Cmd {
+func (claudeProvider) buildCommand(ctx context.Context, projectDir, systemPrompt, userPrompt, model, promptFilePath string, maxTurns int) *exec.Cmd {
 	args := []string{
 		"-p", userPrompt,
 		"--append-system-prompt", systemPrompt,
@@ -44,3 +44,7 @@ func (claudeProvider) waitSucceeded(waitErr, ctxErr error, maxTurnsReached bool)
 	}
 	return maxTurnsReached || errors.Is(ctxErr, context.Canceled)
 }
+
+func (claudeProvider) needsPromptFile() bool { return false }
+
+func (claudeProvider) startupNotice(language string) string { return "" }

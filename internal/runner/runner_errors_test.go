@@ -174,3 +174,38 @@ printf '\n' >&2
 		t.Fatalf("expected stderr scan error, got: %v", err)
 	}
 }
+
+func TestRunPhaseOpenCodeNonZeroExitSurfacesStderr(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "opencode", `#!/bin/sh
+set -eu
+while [ $# -gt 0 ]; do
+	case "$1" in
+		run|--auto)
+			shift
+			;;
+		--format)
+			shift 2
+			;;
+		-f|--file|--model)
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+printf '%s\n' 'opencode failure' >&2
+exit 7
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	lines, err := runPhaseWith(t, t.TempDir(), t.TempDir(), "opencode-error", 1, Options{Provider: "opencode", Language: "en"})
+	if err == nil {
+		t.Fatal("expected non-zero OpenCode exit to fail")
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "OpenCode is running with auto-approved permissions.") || !strings.Contains(joined, "[stderr] opencode failure") {
+		t.Fatalf("unexpected lines: %q", joined)
+	}
+}
