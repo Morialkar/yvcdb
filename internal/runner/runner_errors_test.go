@@ -1,7 +1,9 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +35,73 @@ func TestCodexEventToLinesEmptyPayloads(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProviderHelpersCoverEdgeCases(t *testing.T) {
+	t.Run("claude startup notice", func(t *testing.T) {
+		if got := (claudeProvider{}).startupNotice("en"); got != "" {
+			t.Fatalf("expected empty notice, got %q", got)
+		}
+		if got := (claudeProvider{}).startupNotice("fr"); got != "" {
+			t.Fatalf("expected empty notice, got %q", got)
+		}
+	})
+	t.Run("codex startup notice", func(t *testing.T) {
+		if got := (codexProvider{}).startupNotice("en"); got != "" {
+			t.Fatalf("expected empty notice, got %q", got)
+		}
+		if got := (codexProvider{}).startupNotice("fr"); got != "" {
+			t.Fatalf("expected empty notice, got %q", got)
+		}
+	})
+	t.Run("opencode startup notice", func(t *testing.T) {
+		if got := (opencodeProvider{}).startupNotice("en"); got != "OpenCode is running with auto-approved permissions." {
+			t.Fatalf("unexpected en notice: %q", got)
+		}
+		if got := (opencodeProvider{}).startupNotice("fr"); got != "OpenCode exécute la phase avec des permissions auto-approuvées." {
+			t.Fatalf("unexpected fr notice: %q", got)
+		}
+	})
+	t.Run("opencode bootstrap prompt", func(t *testing.T) {
+		if got := opencodeBootstrapPrompt("  "); got != "Read the attached prompt file in full before doing anything else, treat it as your instructions for this phase, then follow the project instructions below." {
+			t.Fatalf("unexpected blank bootstrap: %q", got)
+		}
+		if got := opencodeBootstrapPrompt("  do the thing  "); !strings.Contains(got, "do the thing") || !strings.HasPrefix(got, "Read the attached prompt file in full") {
+			t.Fatalf("unexpected bootstrap with prompt: %q", got)
+		}
+	})
+	t.Run("provider waitSucceeded", func(t *testing.T) {
+		if !(claudeProvider{}).waitSucceeded(nil, nil, false) {
+			t.Fatal("claude should succeed on nil waitErr")
+		}
+		if !(claudeProvider{}).waitSucceeded(fmt.Errorf("boom"), context.Canceled, false) {
+			t.Fatal("claude should succeed on canceled context")
+		}
+		if !(claudeProvider{}).waitSucceeded(fmt.Errorf("boom"), nil, true) {
+			t.Fatal("claude should succeed on max turns")
+		}
+		if (claudeProvider{}).waitSucceeded(fmt.Errorf("boom"), context.DeadlineExceeded, false) {
+			t.Fatal("claude should fail on non-canceled error")
+		}
+		if !(codexProvider{}).waitSucceeded(nil, nil, false) {
+			t.Fatal("codex should succeed on nil waitErr")
+		}
+		if !(codexProvider{}).waitSucceeded(fmt.Errorf("boom"), context.Canceled, false) {
+			t.Fatal("codex should succeed on canceled context")
+		}
+		if (codexProvider{}).waitSucceeded(fmt.Errorf("boom"), nil, false) {
+			t.Fatal("codex should fail on non-canceled error")
+		}
+		if !(opencodeProvider{}).waitSucceeded(nil, nil, false) {
+			t.Fatal("opencode should succeed on nil waitErr")
+		}
+		if !(opencodeProvider{}).waitSucceeded(fmt.Errorf("boom"), context.Canceled, false) {
+			t.Fatal("opencode should succeed on canceled context")
+		}
+		if (opencodeProvider{}).waitSucceeded(fmt.Errorf("boom"), context.DeadlineExceeded, false) {
+			t.Fatal("opencode should fail on non-canceled error")
+		}
+	})
 }
 
 func runPhaseWith(t *testing.T, projectDir, logDir, timestamp string, iteration int, opts Options) ([]string, error) {
@@ -67,6 +136,32 @@ func TestRunPhaseFailsWhenLogFileIsADirectory(t *testing.T) {
 	_, err := runPhaseWith(t, t.TempDir(), logDir, "ts", 1, Options{})
 	if err == nil || !strings.Contains(err.Error(), "create log") {
 		t.Fatalf("expected create log failure, got: %v", err)
+	}
+}
+
+func TestRunPhaseOpenCodeParserEdgeCases(t *testing.T) {
+	provider := opencodeProvider{}
+	cases := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{name: "empty text", raw: `{"type":"text","part":{"text":"   "}}`},
+		{name: "tool not completed", raw: `{"type":"tool_use","part":{"tool":"read","state":{"status":"running"}}}`},
+		{name: "tool empty name", raw: `{"type":"tool_use","part":{"tool":"   ","state":{"status":"completed"}}}`},
+		{name: "unknown type", raw: `{"type":"step_start"}`},
+		{name: "malformed", raw: `not json`},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got, done := provider.parseLine(tt.raw, "en")
+			if done {
+				t.Fatalf("unexpected completion signal for %s", tt.name)
+			}
+			if len(got) != 0 {
+				t.Fatalf("expected no lines, got %#v", got)
+			}
+		})
 	}
 }
 

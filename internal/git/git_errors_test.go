@@ -203,3 +203,34 @@ func TestCommitAllRespectsPromptFileExclude(t *testing.T) {
 		t.Fatalf("prompt file should not be committed, tree: %q", tree)
 	}
 }
+
+func TestEnsureInfoExcludeEntrySkipsNonRepo(t *testing.T) {
+	if added, err := EnsureInfoExcludeEntry(t.TempDir(), ".yvcdb_*.md"); err != nil {
+		t.Fatal(err)
+	} else if added {
+		t.Fatal("non-repo should not add an entry")
+	}
+}
+
+func TestEnsureInfoExcludeEntryCreatesMissingInfoDir(t *testing.T) {
+	dir := initRepo(t)
+	infoDir := filepath.Join(dir, ".git", "info")
+	if err := os.RemoveAll(infoDir); err != nil {
+		t.Fatal(err)
+	}
+	added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !added {
+		t.Fatal("expected entry to be added after recreating info dir")
+	}
+	path := resolveGitPath(t, dir, runGitOutput(t, dir, "rev-parse", "--git-path", "info/exclude"))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), ".yvcdb_*.md") {
+		t.Fatalf("exclude entry missing: %q", data)
+	}
+}
