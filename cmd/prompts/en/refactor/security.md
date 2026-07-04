@@ -19,12 +19,12 @@ Any data coming from req.body, req.params, req.query, form inputs, uploaded file
 - If a validation library exists (zod, joi, yup, validator.php...) → use it
 - If none exists → add minimal manual validation (type check + sanitize)
 - Mark: `// SECURITY_FIXED: input validated`
-- For anything you cannot validate now: `// SECURITY_REVIEW: unvalidated input — [reason]`
+- For anything you cannot validate now: `// REQUIRES_REVIEW: unvalidated input — [reason]`
 
 ### P2 — Authorization vs Authentication
 Verify that protected routes/endpoints check not only "is authenticated" but also "is allowed to access THIS resource."
 - Example: `/api/users/:id` must verify that the authenticated user is that user (or an admin)
-- Mark places without an authorization check: `// SECURITY_REVIEW: missing authorization`
+- Mark places without an authorization check: `// REQUIRES_REVIEW: missing authorization`
 
 ### P3 — SQL injections
 Search for string concatenation in SQL queries.
@@ -33,7 +33,7 @@ Search for string concatenation in SQL queries.
 
 ### P4 — Unescaped outputs
 In templates/views, verify that dynamic variables are escaped before being rendered as HTML.
-- Mark dangerous outputs: `// SECURITY_REVIEW: potentially unescaped output`
+- Mark dangerous outputs: `// REQUIRES_REVIEW: potentially unescaped output`
 
 ## At the end, produce a report
 
@@ -42,7 +42,7 @@ In templates/views, verify that dynamic variables are escaped before being rende
 ### Fixed
 - [list of fixes with file:line]
 
-### Requires human review (SECURITY_REVIEW)
+### Requires human review (REQUIRES_REVIEW)
 - [list with explanation]
 
 ### Not addressed (out of scope or uncertain)

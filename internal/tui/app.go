@@ -55,14 +55,6 @@ const (
 	runFailed
 )
 
-// stages: phases executed sequentially; phases within a stage run in parallel.
-var stages = [][]int{
-	{0},       // diagnostic
-	{1},       // safety
-	{2, 3, 4}, // security + structure + readability in parallel
-	{5},       // devil
-}
-
 type runLineMsg struct {
 	slot int
 	line string
@@ -107,6 +99,7 @@ type Model struct {
 	MaxTurns   int
 	Language   string
 	Prompts    map[string]string
+	Workflow   phases.Workflow
 	l10n       i18n.Localizer
 
 	state     appState
@@ -132,20 +125,40 @@ type Model struct {
 }
 
 // NewModel constructs the YVCDB application model.
-func NewModel(projectDir string, startPhase int, noGit bool, provider, model string, maxTurns int, language string, prompts map[string]string) Model {
+func NewModel(projectDir string, startPhase int, noGit bool, provider, model string, maxTurns int, language string, prompts map[string]string, workflows ...phases.Workflow) Model {
 	ts := time.Now().Format(sessionTimestampFormat)
 	vp := viewport.New(defaultViewportWidth, defaultViewportHeight)
 	l10n := i18n.New(language)
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		panic(err)
+	}
+	if len(workflows) > 0 {
+		workflow = workflows[0]
+	}
 
 	checklistLabels := []string{
 		l10n.Pick("The code is understandable without external context", "Le code est compréhensible sans contexte externe"),
-		l10n.Pick("No unresolved UNCLEAR: / SECURITY: / DUPLICATE: markers", "Aucun UNCLEAR: / SECURITY: / DUPLICATE: non résolu"),
+		l10n.Pick("No unresolved UNCLEAR: / REQUIRES_REVIEW: / ASSUMPTION: / DUPLICATE: markers", "Aucun marqueur UNCLEAR: / REQUIRES_REVIEW: / ASSUMPTION: / DUPLICATE: non résolu"),
 		l10n.Pick("Tests cover the happy path, edge cases, and errors", "Tests : cas nominal + edge case + erreur couverts"),
 		l10n.Pick("No business logic in the UI", "Zéro logique métier dans le UI"),
 		l10n.Pick("All catches are explicit (no empty catches)", "Tous les catch sont explicites (pas de catch vide)"),
 		l10n.Pick("All external inputs are validated", "Tous les inputs externes sont validés"),
 		l10n.Pick("No hardcoded secrets in source code", "Aucun secret hardcodé dans le code source"),
 		l10n.Pick("REFACTOR_BACKLOG is documented and prioritized", "REFACTOR_BACKLOG documenté et priorisé"),
+	}
+	if workflow.Mode == phases.ModeGreenfield {
+		checklistLabels = []string{
+			l10n.Pick("The approved specification and explicit constraints are satisfied", "La spécification approuvée et les contraintes explicites sont respectées"),
+			l10n.Pick("Architecture, schemas, API signatures, and technology decisions match their approved documents", "L'architecture, les schémas, les signatures API et les choix technologiques correspondent aux documents approuvés"),
+			l10n.Pick("Every planned task and acceptance criterion is complete", "Chaque tâche planifiée et chaque critère d'acceptation sont complétés"),
+			l10n.Pick("Tests cover the nominal case, an edge case, and an error case for each logic unit", "Les tests couvrent le cas nominal, un cas limite et un cas d'erreur pour chaque unité logique"),
+			l10n.Pick("The human reviewer can explain every generated line", "La personne responsable peut expliquer chaque ligne générée"),
+			l10n.Pick("Every ASSUMPTION marker has been reviewed and resolved or accepted", "Chaque marqueur ASSUMPTION a été révisé et résolu ou accepté"),
+			l10n.Pick("Every REQUIRES_REVIEW marker has received explicit human review", "Chaque marqueur REQUIRES_REVIEW a reçu une revue humaine explicite"),
+			l10n.Pick("The full test suite, coverage target, and quality checks pass", "La suite de tests, la cible de couverture et les contrôles qualité passent"),
+			l10n.Pick("The adversarial review has no unresolved blocker", "La revue contradictoire ne contient aucun blocage non résolu"),
+		}
 	}
 	items := make([]ChecklistItem, len(checklistLabels))
 	for i, l := range checklistLabels {
@@ -167,7 +180,7 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 
 	// find the stage containing startPhase
 	stageIdx := 0
-	for si, stage := range stages {
+	for si, stage := range workflow.Stages {
 		for _, pi := range stage {
 			if pi == startPhase {
 				stageIdx = si
@@ -184,6 +197,7 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 		MaxTurns:   maxTurns,
 		Language:   l10n.Language,
 		Prompts:    prompts,
+		Workflow:   workflow,
 		l10n:       l10n,
 		timestamp:  ts,
 		logDir:     filepath.Join(projectDir, logDirectoryName),
@@ -465,12 +479,18 @@ func (m Model) renderHeader() string {
 
 func (m Model) phaseTitle(id string) string {
 	titles := map[string][2]string{
-		"diagnostic":  {"Diagnostic — codebase inventory and risks", "Diagnostic — inventaire et risques du code"},
-		"safety":      {"Safety net — smoke tests and git snapshot", "Filet de sécurité — tests smoke + snapshot git"},
-		"security":    {"Security — secrets, validation, authorization", "Sécurité — secrets, validation, auth"},
-		"structure":   {"Structure — business logic out of UI and deduplication", "Structure — logique hors UI + déduplication"},
-		"readability": {"Readability — naming, decomposition, documentation", "Lisibilité — nommage, découpe, documentation"},
-		"devil":       {"Devil's advocate — final adversarial review", "Avocat du diable — revue finale sans ménagement"},
+		"diagnostic":     {"Diagnostic — codebase inventory and risks", "Diagnostic — inventaire et risques du code"},
+		"safety":         {"Safety net — smoke tests and git snapshot", "Filet de sécurité — tests smoke + snapshot git"},
+		"security":       {"Security — secrets, validation, authorization", "Sécurité — secrets, validation, auth"},
+		"structure":      {"Structure — business logic out of UI and deduplication", "Structure — logique hors UI + déduplication"},
+		"readability":    {"Readability — naming, decomposition, documentation", "Lisibilité — nommage, découpe, documentation"},
+		"devil":          {"Devil's advocate — final adversarial review", "Avocat du diable — revue finale sans ménagement"},
+		"specification":  {"Specification — requirements and acceptance criteria", "Spécification — exigences et critères d'acceptation"},
+		"architecture":   {"Architecture — decisions, constraints, schemas, and APIs", "Architecture — décisions, contraintes, schémas et API"},
+		"planning":       {"Plan — self-contained implementation tasks", "Plan — tâches d'implémentation autonomes"},
+		"foundation":     {"Foundation — scaffold, tooling, and test harness", "Fondations — structure, outillage et banc de tests"},
+		"implementation": {"Implementation — production code and tests together", "Implémentation — code de production et tests ensemble"},
+		"verification":   {"Verification — rigorous quality and security checks", "Vérification — contrôles rigoureux de qualité et sécurité"},
 	}
 	title, ok := titles[id]
 	if !ok {
@@ -481,7 +501,7 @@ func (m Model) phaseTitle(id string) string {
 
 func (m Model) phaseState(phaseIdx int) (state string, iter int) {
 	// completed stage?
-	for si, stage := range stages {
+	for si, stage := range m.Workflow.Stages {
 		for _, pi := range stage {
 			if pi != phaseIdx {
 				continue
@@ -513,7 +533,7 @@ func (m Model) renderPipeline() string {
 	var lines []string
 	lines = append(lines, styleDim.Render(m.l10n.T("pipeline")))
 
-	for i, p := range phases.All {
+	for i, p := range m.Workflow.Phases {
 		c := lipgloss.NewStyle().Foreground(p.Color)
 		label := fmt.Sprintf("%s — %s", p.Label, m.phaseTitle(p.ID))
 
@@ -566,7 +586,7 @@ func (m Model) renderTabs() string {
 	}
 	var tabs []string
 	for i, r := range m.runs {
-		p := phases.All[r.phaseIdx]
+		p := m.Workflow.Phases[r.phaseIdx]
 		var status string
 		switch r.status {
 		case runActive:
@@ -602,15 +622,15 @@ func (m Model) renderStage() string {
 		header = c.Render(m.l10n.T("fix.round", m.fixRound))
 		info = styleDim.Render("  " + m.ProjectDir)
 	} else {
-		p := phases.All[r.phaseIdx]
+		p := m.Workflow.Phases[r.phaseIdx]
 		c := lipgloss.NewStyle().Foreground(p.Color).Bold(true)
 		header = c.Render(fmt.Sprintf("▶ %s — %s", p.Label, m.phaseTitle(p.ID)))
 		info = styleDim.Render("  " + m.l10n.T("iteration", r.iteration, r.workDir))
 	}
 
 	borderColor := lipgloss.Color("8")
-	if m.state != stateFixRun && r.phaseIdx < len(phases.All) {
-		borderColor = phases.All[r.phaseIdx].Color
+	if m.state != stateFixRun && r.phaseIdx < len(m.Workflow.Phases) {
+		borderColor = m.Workflow.Phases[r.phaseIdx].Color
 	}
 	vpStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -638,7 +658,7 @@ func (m Model) renderDecision(r *phaseRun) string {
 	if m.state == stateFixRun {
 		name = m.l10n.T("fix.name")
 	} else {
-		name = phases.All[r.phaseIdx].Label
+		name = m.Workflow.Phases[r.phaseIdx].Label
 	}
 	q := styleCyan.Render("?") + " " + styleBold.Render(m.l10n.T("decision.question", name))
 	opts := strings.Join([]string{
@@ -707,11 +727,11 @@ func (m Model) renderDone() string {
 // ─── Stage orchestration ─────────────────────────────────────────────────────
 
 func (m Model) startStage() (Model, tea.Cmd) {
-	if m.stageIdx >= len(stages) {
+	if m.stageIdx >= len(m.Workflow.Stages) {
 		return m.enterChecklist()
 	}
 
-	stage := stages[m.stageIdx]
+	stage := m.Workflow.Stages[m.stageIdx]
 	m.runs = nil
 	m.activeRun = 0
 
@@ -723,12 +743,12 @@ func (m Model) startStage() (Model, tea.Cmd) {
 		if phaseIdx < m.StartPhase {
 			continue
 		}
-		p := phases.All[phaseIdx]
+		p := m.Workflow.Phases[phaseIdx]
 		r := &phaseRun{
 			phaseIdx:  phaseIdx,
 			iteration: 1,
 			workDir:   m.ProjectDir,
-			branch:    fmt.Sprintf("refactor/%s/%s", m.timestamp, p.ID),
+			branch:    fmt.Sprintf("%s/%s/%s", m.Workflow.Mode, m.timestamp, p.ID),
 		}
 
 		if m.useGit {
@@ -775,17 +795,14 @@ func (m Model) startStage() (Model, tea.Cmd) {
 
 func (m *Model) launchRun(slot int) tea.Cmd {
 	r := m.runs[slot]
-	p := phases.All[r.phaseIdx]
+	p := m.Workflow.Phases[r.phaseIdx]
 
-	systemPrompt := m.Prompts[p.ID]
-	if r.iteration > 1 {
-		iterationPrompt := m.l10n.Pick(
-			"\n\nIMPORTANT: This is iteration %d of this phase. The previous result was not satisfactory. Be more exhaustive and critical, and cover what was missed.",
-			"\n\nIMPORTANT: C'est l'itération %d de cette phase. Le résultat précédent n'était pas satisfaisant. Sois plus exhaustif et critique. Couvre ce qui a été manqué.",
-		)
-		systemPrompt += fmt.Sprintf(iterationPrompt, r.iteration)
+	systemPrompt, err := m.phaseSystemPrompt(r, p)
+	if err != nil {
+		r.status = runFailed
+		r.errMsg = err.Error()
+		return nil
 	}
-	systemPrompt += m.l10n.Pick("\n\nAlways communicate your analysis and final result in English.", "\n\nCommunique toujours ton analyse et ton résultat final en français.")
 
 	r.lineCh = make(chan string, runChannelCapacity)
 	r.doneCh = make(chan error, 1)
@@ -797,6 +814,28 @@ func (m *Model) launchRun(slot int) tea.Cmd {
 	}, r.lineCh, r.doneCh)
 	r.feedback = ""
 	return waitForRun(slot, r.lineCh, r.doneCh)
+}
+
+func (m Model) phaseSystemPrompt(r *phaseRun, phase phases.Phase) (string, error) {
+	systemPrompt := m.Prompts[phase.ID]
+	systemPrompt += m.l10n.Pick(
+		"\n\n# AFTER operating rules\nThe human makes every consequential decision. Preserve approved constraints and stop with DECISION_REQUIRED when one is missing. Mark every inference not grounded in project evidence as ASSUMPTION. Mark security-sensitive code involving authentication, payments, permissions, secrets, or personal data as REQUIRES_REVIEW. Generate tests with every behavior change, covering the nominal case, an edge case, and an error case. Treat generated output as unverified until commands prove it. Your response must be self-contained for a future session with no conversational memory.",
+		"\n\n# Règles d'opération AFTER\nLa personne responsable prend chaque décision conséquente. Respecte les contraintes approuvées et arrête-toi avec DECISION_REQUIRED lorsqu'une décision manque. Marque toute inférence non fondée sur le projet par ASSUMPTION. Marque le code sensible touchant l'authentification, les paiements, les permissions, les secrets ou les données personnelles par REQUIRES_REVIEW. Génère les tests avec chaque changement de comportement, couvrant le cas nominal, un cas limite et un cas d'erreur. Toute sortie générée demeure non vérifiée jusqu'à preuve par commandes. Ta réponse doit être autonome pour une session future sans mémoire conversationnelle.",
+	)
+	if standards, err := os.ReadFile(filepath.Join(r.workDir, "AFTER_STANDARDS.md")); err == nil {
+		systemPrompt += "\n\n# Project quality standards\n\n" + string(standards)
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read AFTER_STANDARDS.md: %w", err)
+	}
+	if r.iteration > 1 {
+		iterationPrompt := m.l10n.Pick(
+			"\n\nIMPORTANT: This is iteration %d of this phase. The previous result was not satisfactory. Be more exhaustive and critical, and cover what was missed.",
+			"\n\nIMPORTANT: C'est l'itération %d de cette phase. Le résultat précédent n'était pas satisfaisant. Sois plus exhaustif et critique. Couvre ce qui a été manqué.",
+		)
+		systemPrompt += fmt.Sprintf(iterationPrompt, r.iteration)
+	}
+	systemPrompt += m.l10n.Pick("\n\nAlways communicate your analysis and final result in English.", "\n\nCommunique toujours ton analyse et ton résultat final en français.")
+	return systemPrompt, nil
 }
 
 func waitForRun(slot int, lineCh chan string, doneCh chan error) tea.Cmd {
@@ -820,8 +859,8 @@ func (m Model) approveRun(slot int) (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	p := phases.All[r.phaseIdx]
-	if err := m.commitChanges(r.workDir, fmt.Sprintf("refactor(%s): changes applied by YVCDB", p.Label)); err != nil {
+	p := m.Workflow.Phases[r.phaseIdx]
+	if err := m.commitChanges(r.workDir, fmt.Sprintf("%s(%s): changes applied by YVCDB", m.Workflow.Mode, p.Label)); err != nil {
 		r.errMsg = err.Error()
 		return m, nil
 	}
@@ -846,9 +885,9 @@ func (m Model) reiterateRunWithFeedback(slot int, feedback string) (Model, tea.C
 	r := m.runs[slot]
 	label := "fix"
 	if m.state != stateFixRun {
-		label = phases.All[r.phaseIdx].Label
+		label = m.Workflow.Phases[r.phaseIdx].Label
 	}
-	if err := m.commitChanges(r.workDir, fmt.Sprintf("refactor(%s): iter%d — YVCDB", label, r.iteration)); err != nil {
+	if err := m.commitChanges(r.workDir, fmt.Sprintf("%s(%s): iter%d — YVCDB", m.Workflow.Mode, label, r.iteration)); err != nil {
 		r.errMsg = err.Error()
 		return m, nil
 	}
@@ -968,12 +1007,15 @@ func (m Model) restartFixRun(feedback string) (Model, tea.Cmd) {
 	}
 
 	systemPrompt := m.l10n.Pick(
-		"You are performing the final fixes after a refactoring. A human reviewer marked these quality criteria as NOT satisfied:\n\n"+strings.Join(failed, "\n")+"\n\nAnalyze the project, identify precisely why each criterion fails, and fix it. Be exhaustive and concrete: modify the code directly. Respond in English.",
-		"Tu es en mode correction finale d'un refactoring. Les critères de qualité suivants ont été jugés NON satisfaits par une revue humaine :\n\n"+strings.Join(failed, "\n")+"\n\nAnalyse le projet, identifie précisément pourquoi chaque critère échoue, et corrige. Sois exhaustif et concret : modifie le code directement. Réponds en français.",
+		"You are performing final fixes after a managed AFTER workflow. A human reviewer marked these quality criteria as NOT satisfied:\n\n"+strings.Join(failed, "\n")+"\n\nAnalyze the project, identify precisely why each criterion fails, and fix it. Be exhaustive and concrete: modify the code directly. Respond in English.",
+		"Tu effectues les corrections finales d'un workflow AFTER géré. Les critères de qualité suivants ont été jugés NON satisfaits par une revue humaine :\n\n"+strings.Join(failed, "\n")+"\n\nAnalyse le projet, identifie précisément pourquoi chaque critère échoue, et corrige. Sois exhaustif et concret : modifie le code directement. Réponds en français.",
 	)
+	if standards, err := os.ReadFile(filepath.Join(m.ProjectDir, "AFTER_STANDARDS.md")); err == nil {
+		systemPrompt += "\n\n# Project quality standards\n\n" + string(standards)
+	}
 
 	r := &phaseRun{
-		phaseIdx:  len(phases.All) - 1, // use the devil phase color
+		phaseIdx:  len(m.Workflow.Phases) - 1, // use the devil phase color
 		iteration: m.fixRound,
 		workDir:   m.ProjectDir,
 		lineCh:    make(chan string, runChannelCapacity),

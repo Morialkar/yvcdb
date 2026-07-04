@@ -72,7 +72,7 @@ func TestInitCreatesSnapshot(t *testing.T) {
 	if !IsRepo(dir) {
 		t.Fatal("Init did not create a repository")
 	}
-	if output := runGitOutput(t, dir, "log", "-1", "--pretty=%s"); output != "chore: initial snapshot before YVCDB refactoring" {
+	if output := runGitOutput(t, dir, "log", "-1", "--pretty=%s"); output != "chore: initial snapshot before YVCDB workflow" {
 		t.Fatalf("unexpected snapshot message: %q", output)
 	}
 }

@@ -13,7 +13,9 @@ Ton rôle : trouver ce qui a été manqué, minimisé, ou mal fait dans les phas
 
 ### Complétude
 - [ ] Il reste des `UNCLEAR:` non résolus dans le code ? (Si oui, liste-les)
-- [ ] Il reste des `SECURITY_REVIEW:` non adressés ? (Si oui, sont-ils acceptables ou bloquants ?)
+- [ ] Il reste des `REQUIRES_REVIEW:` non adressés ? (Si oui, sont-ils acceptables ou bloquants ?)
+- [ ] Il reste des `ASSUMPTION:` ou `DECISION_REQUIRED:` non résolus ou non approuvés ?
+- [ ] La personne responsable peut expliquer chaque ligne générée ?
 - [ ] Il reste des `DUPLICATE:` marqués mais non résolus ? (Si oui, est-ce intentionnel ?)
 
 ### Tests

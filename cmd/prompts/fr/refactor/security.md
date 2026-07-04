@@ -19,12 +19,12 @@ Toute donnée venant de : req.body, req.params, req.query, form inputs, fichiers
 - Si une librairie de validation existe (zod, joi, yup, validator.php...) → utilise-la
 - Si aucune → ajoute une validation manuelle minimale (type check + sanitize)
 - Marque : `// SECURITY_FIXED: input validé`
-- Ce que tu ne peux pas valider maintenant : `// SECURITY_REVIEW: input non validé — [raison]`
+- Ce que tu ne peux pas valider maintenant : `// REQUIRES_REVIEW: input non validé — [raison]`
 
 ### P2 — Authorization vs Authentication
 Vérifie que les routes/endpoints protégés vérifient non seulement "est connecté" mais aussi "a le droit d'accéder à CETTE ressource".
 - Ex: `/api/users/:id` doit vérifier que l'user connecté est bien cet user (ou admin)
-- Marque les endroits sans vérification d'authorization : `// SECURITY_REVIEW: authorization manquante`
+- Marque les endroits sans vérification d'authorization : `// REQUIRES_REVIEW: authorization manquante`
 
 ### P3 — Injections SQL
 Cherche les concaténations de strings dans les requêtes SQL.
@@ -33,7 +33,7 @@ Cherche les concaténations de strings dans les requêtes SQL.
 
 ### P4 — Outputs non échappés
 Dans les templates/views, vérifie que les variables dynamiques sont échappées avant affichage HTML.
-- Marque les outputs dangereux : `// SECURITY_REVIEW: output potentiellement non échappé`
+- Marque les outputs dangereux : `// REQUIRES_REVIEW: output potentiellement non échappé`
 
 ## À la fin, produis un rapport
 
@@ -42,7 +42,7 @@ Dans les templates/views, vérifie que les variables dynamiques sont échappées
 ### Corrigé
 - [liste des corrections avec fichier:ligne]
 
-### Nécessite revue humaine (SECURITY_REVIEW)
+### Nécessite revue humaine (REQUIRES_REVIEW)
 - [liste avec explication]
 
 ### Non traité (hors scope ou incertain)

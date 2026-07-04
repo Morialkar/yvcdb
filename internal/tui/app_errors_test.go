@@ -286,6 +286,7 @@ func TestStartStageGitFailures(t *testing.T) {
 
 	// parallel stage: WorktreeAdd fails for every phase
 	m = newTestModel(t)
+	m.Workflow.Stages = [][]int{{0}, {1}, {2, 3, 4}, {5}}
 	m.useGit = true
 	m.state = stateStage
 	m.stageIdx = 2
@@ -303,7 +304,7 @@ func TestStartStageSkipsPhasesBeforeStartPhase(t *testing.T) {
 	m.state = stateStage
 	m.stageIdx = 0 // stages 0..2 contain phases < 5 only: all skipped
 	m, _ = m.startStage()
-	if m.stageIdx != 3 || len(m.runs) != 1 || m.runs[0].phaseIdx != 5 {
+	if m.stageIdx != 5 || len(m.runs) != 1 || m.runs[0].phaseIdx != 5 {
 		t.Fatalf("expected jump to devil stage, got stage=%d runs=%d", m.stageIdx, len(m.runs))
 	}
 	m = drainActiveRuns(t, m)
@@ -384,6 +385,7 @@ func TestCheckStageDoneGitFailures(t *testing.T) {
 func TestCheckStageDoneRebaseConflict(t *testing.T) {
 	dir := newGitRepo(t)
 	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m.Workflow.Stages = [][]int{{0}, {1}, {2, 3, 4}, {5}}
 	m.useGit = true
 	m.stageIdx = 2
 
@@ -414,16 +416,16 @@ func TestCheckStageDoneRebaseConflict(t *testing.T) {
 	}
 }
 
-func TestDoGitInitFailure(t *testing.T) {
+func TestDoGitInitSupportsEmptyGreenfieldProject(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_NAME", "YVCDB Test")
 	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
 	t.Setenv("GIT_COMMITTER_NAME", "YVCDB Test")
 	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
-	// empty project: git init works but the snapshot commit fails
+	// Empty greenfield projects need an initial commit before phase branches.
 	m := NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts())
 	msg := m.doGitInit()()
 	done, ok := msg.(gitSetupDoneMsg)
-	if !ok || done.err == nil {
-		t.Fatalf("expected git init failure, got %#v", msg)
+	if !ok || done.err != nil || !done.useGit {
+		t.Fatalf("expected successful empty repository initialization, got %#v", msg)
 	}
 }

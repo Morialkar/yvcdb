@@ -16,14 +16,14 @@ func initRepo(t *testing.T) string {
 	return dir
 }
 
-func TestInitFailsWithNothingToCommit(t *testing.T) {
+func TestInitFailsForMissingDirectory(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_NAME", "YVCDB Test")
 	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
 	t.Setenv("GIT_COMMITTER_NAME", "YVCDB Test")
 	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
-	// empty dir: init and add succeed, commit fails (nothing staged)
-	if err := Init(t.TempDir()); err == nil {
-		t.Fatal("expected commit failure on empty directory")
+	dir := filepath.Join(t.TempDir(), "missing")
+	if err := Init(dir); err == nil {
+		t.Fatal("expected initialization failure for missing directory")
 	}
 }
 

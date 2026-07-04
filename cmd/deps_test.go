@@ -10,21 +10,27 @@ import (
 )
 
 func TestLoadPromptsForEachLanguage(t *testing.T) {
-	for _, language := range []string{"en", "fr"} {
-		t.Run(language, func(t *testing.T) {
-			prompts, err := loadPrompts(language)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(prompts) != len(phases.All) {
-				t.Fatalf("got %d prompts, want %d", len(prompts), len(phases.All))
-			}
-			for _, phase := range phases.All {
-				if strings.TrimSpace(prompts[phase.ID]) == "" {
-					t.Errorf("prompt %s is empty", phase.ID)
+	for _, mode := range []string{phases.ModeRefactor, phases.ModeGreenfield} {
+		workflow, err := phases.ForMode(mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, language := range []string{"en", "fr"} {
+			t.Run(mode+"/"+language, func(t *testing.T) {
+				prompts, err := loadPrompts(language, workflow)
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-		})
+				if len(prompts) != len(workflow.Phases) {
+					t.Fatalf("got %d prompts, want %d", len(prompts), len(workflow.Phases))
+				}
+				for _, phase := range workflow.Phases {
+					if strings.TrimSpace(prompts[phase.ID]) == "" {
+						t.Errorf("prompt %s is empty", phase.ID)
+					}
+				}
+			})
+		}
 	}
 }
 

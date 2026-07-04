@@ -13,12 +13,13 @@ func IsRepo(dir string) bool {
 	return cmd.Run() == nil
 }
 
-// Init initializes a repository and creates a snapshot commit.
+// Init initializes a repository and creates a snapshot commit, including for an
+// empty greenfield directory.
 func Init(dir string) error {
 	cmds := [][]string{
 		{"git", "-C", dir, "init"},
 		{"git", "-C", dir, "add", "."},
-		{"git", "-C", dir, "commit", "-m", "chore: initial snapshot before YVCDB refactoring"},
+		{"git", "-C", dir, "commit", "--allow-empty", "-m", "chore: initial snapshot before YVCDB workflow"},
 	}
 	for _, args := range cmds {
 		out, err := exec.Command(args[0], args[1:]...).CombinedOutput()

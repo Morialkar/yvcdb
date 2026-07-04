@@ -80,9 +80,38 @@ func TestViewsAndPhasePresentation(t *testing.T) {
 	}
 }
 
+func TestGreenfieldWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
+	dir := t.TempDir()
+	workflow, err := phases.ForMode(phases.ModeGreenfield)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts := make(map[string]string, len(workflow.Phases))
+	for _, phase := range workflow.Phases {
+		prompts[phase.ID] = "prompt for " + phase.ID
+	}
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, workflow)
+	if len(m.Workflow.Phases) != 7 || len(m.checkItems) != 9 {
+		t.Fatalf("unexpected greenfield model: phases=%d checklist=%d", len(m.Workflow.Phases), len(m.checkItems))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AFTER_STANDARDS.md"), []byte("Always test error paths."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := &phaseRun{phaseIdx: 3, iteration: 2, workDir: dir}
+	systemPrompt, err := m.phaseSystemPrompt(run, workflow.Phases[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"prompt for foundation", "AFTER operating rules", "Always test error paths.", "iteration 2"} {
+		if !strings.Contains(systemPrompt, required) {
+			t.Fatalf("system prompt missing %q", required)
+		}
+	}
+}
+
 func TestKeyboardStateTransitions(t *testing.T) {
 	m := newTestModel(t)
-	m.stageIdx = len(stages)
+	m.stageIdx = len(m.Workflow.Stages)
 	m.input.SetValue("sonnet")
 	updated, _ := m.handleKey(key(tea.KeyEnter, 0))
 	m = updated.(Model)
@@ -237,6 +266,7 @@ func TestParallelStageIntegration(t *testing.T) {
 	}
 
 	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m.Workflow.Stages = [][]int{{0}, {1}, {2, 3, 4}, {5}}
 	m.state = stateStage
 	m.stageIdx = 2
 	for i, phaseIdx := range []int{2, 3, 4} {

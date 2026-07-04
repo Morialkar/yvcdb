@@ -10,11 +10,33 @@ import (
 
 func resetFlags(t *testing.T) {
 	t.Helper()
-	origLang, origProvider, origPhase, origModel := flagLang, flagProvider, flagPhase, flagModel
+	origLang, origProvider, origPhase, origModel, origMode := flagLang, flagProvider, flagPhase, flagModel, flagMode
 	t.Cleanup(func() {
-		flagLang, flagProvider, flagPhase, flagModel = origLang, origProvider, origPhase, origModel
+		flagLang, flagProvider, flagPhase, flagModel, flagMode = origLang, origProvider, origPhase, origModel, origMode
 	})
-	flagLang, flagProvider, flagPhase, flagModel = "", "", "", ""
+	flagLang, flagProvider, flagPhase, flagModel, flagMode = "", "", "", "", "auto"
+}
+
+func TestDetectMode(t *testing.T) {
+	empty := t.TempDir()
+	if got, err := detectMode(empty); err != nil || got != "greenfield" {
+		t.Fatalf("empty directory: mode=%q err=%v", got, err)
+	}
+	if err := os.Mkdir(filepath.Join(empty, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := detectMode(empty); err != nil || got != "greenfield" {
+		t.Fatalf("git-only directory: mode=%q err=%v", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(empty, "README.md"), []byte("project"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := detectMode(empty); err != nil || got != "refactor" {
+		t.Fatalf("non-empty directory: mode=%q err=%v", got, err)
+	}
+	if _, err := detectMode(filepath.Join(empty, "missing")); err == nil {
+		t.Fatal("missing directory should fail")
+	}
 }
 
 func writeFakeClaude(t *testing.T) {

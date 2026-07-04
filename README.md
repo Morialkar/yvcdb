@@ -6,7 +6,7 @@
 
 *[Documentation en français](README.fr.md)*
 
-YVCDB is an interactive CLI that orchestrates structured codebase refactoring through Claude Code or Codex CLI. It runs specialized review phases, isolates parallel changes in Git worktrees, and keeps a human approval step before changes are integrated.
+YVCDB is an interactive CLI that applies the AFTER methodology through Claude Code or Codex CLI. It can refactor an existing codebase or guide a new project from specification through adversarial review, with a human approval gate after every phase.
 
 The interface defaults to English and also supports French.
 
@@ -132,6 +132,7 @@ Common overrides:
 yvcdb --model opus --lang fr --max-turns 30 /path/to/project
 yvcdb --provider codex --model gpt-5.4 /path/to/project
 yvcdb --phase security /path/to/project
+yvcdb --mode greenfield /path/to/empty-project
 yvcdb --no-git /path/to/project
 ```
 
@@ -143,19 +144,36 @@ Available flags:
 | `--model <model>` | Override the configured provider model for this run |
 | `--lang en\|fr` | Override the configured language for this run |
 | `--max-turns <n>` | Set maximum turns for Claude; default: `20`. Codex CLI has no equivalent flag |
-| `--phase <id>` | Start at `diagnostic`, `safety`, `security`, `structure`, `readability`, or `devil` |
+| `--mode auto\|refactor\|greenfield` | Select the workflow; `auto` uses greenfield only when the directory has no project files |
+| `--phase <id>` | Start at a phase available in the selected workflow |
 | `--no-git` | Disable automatic branches, commits, worktrees, and merges |
 
 The selected model is always shown for confirmation before the pipeline starts.
 
-## Refactoring pipeline
+## Managed AFTER workflows
 
-YVCDB runs four stages:
+With `--mode auto` (the default), an empty directory, including a Git-only directory, selects `greenfield`; a directory containing project files selects `refactor`. The mode can always be overridden explicitly.
+
+The refactor workflow runs six sequential phases:
 
 1. **Diagnostic** — inventories the codebase and identifies risks without modifying files.
 2. **Safety net** — adds smoke tests and records the current state.
-3. **Parallel review** — runs security, structure, and readability phases in separate Git worktrees.
-4. **Devil's advocate** — performs a final adversarial review.
+3. **Security** — addresses security findings and flags sensitive code for review.
+4. **Structure** — extracts business logic and handles duplication.
+5. **Readability** — improves naming, decomposition, and documentation.
+6. **Devil's advocate** — performs a final adversarial review.
+
+The greenfield workflow runs seven sequential phases:
+
+1. **Specification** — produces `AFTER_SPEC.md`; no code is generated.
+2. **Architecture** — produces `AFTER_ARCHITECTURE.md` and `AFTER_STANDARDS.md`; no code is generated.
+3. **Planning** — produces the self-contained task plan in `AFTER_PLAN.md`; no code is generated.
+4. **Foundation** — creates the approved scaffold, tooling, and test harness.
+5. **Implementation** — implements approved tasks with production code and tests together.
+6. **Verification** — proves requirements, coverage, errors, and security checks.
+7. **Devil's advocate** — performs the final adversarial review without modifying files.
+
+`AFTER_STANDARDS.md`, once created, is injected into every later agent session. Both workflows require `ASSUMPTION`, `DECISION_REQUIRED`, and `REQUIRES_REVIEW` markers where applicable.
 
 Each completed phase waits for a human decision:
 
@@ -167,20 +185,15 @@ Each completed phase waits for a human decision:
 | `s` | Skip the result |
 | `q` | Quit and cancel active agent subprocesses |
 
-During the parallel stage, use `Tab` or `1`–`3` to switch between runs.
-
-After all phases, YVCDB presents an eight-item quality checklist. Failed criteria can be sent through an additional interactive correction loop.
+After all phases, YVCDB presents a workflow-specific quality checklist. Failed criteria can be sent through an additional interactive correction loop.
 
 ## Git behavior
 
 When Git integration is enabled, YVCDB:
 
 - offers to initialize a repository when none exists;
-- creates phase branches named `refactor/<timestamp>/<phase>`;
-- runs parallel phases in temporary worktrees under the system temporary directory;
+- creates phase branches named `<mode>/<timestamp>/<phase>`;
 - commits approved changes;
-- rebases parallel branches sequentially onto the updated base branch;
-- integrates them with fast-forward merges.
 
 If branch creation, commit, rebase, or merge fails, YVCDB stops that path and reports the error instead of silently advancing. Conflicted rebases are aborted and their worktrees are preserved for manual resolution. Run with a clean working tree for predictable results.
 

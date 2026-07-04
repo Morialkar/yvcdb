@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -22,12 +23,13 @@ var (
 	flagNoGit    bool
 	flagLang     string
 	flagProvider string
+	flagMode     string
 	version      = "dev"
 )
 
 var rootCmd = &cobra.Command{
 	Use:     "yvcdb [project/path]",
-	Short:   "Your Vibe Code Deserves Better — automated refactoring powered by Claude Code or Codex",
+	Short:   "Your Vibe Code Deserves Better — managed AFTER workflows powered by Claude Code or Codex",
 	Version: version,
 	Args:    cobra.MaximumNArgs(1),
 	RunE:    run,
@@ -44,10 +46,11 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.Flags().StringVar(&flagPhase, "phase", "", "Resume at a specific phase (diagnostic, safety, security, structure, readability, devil)")
+	rootCmd.Flags().StringVar(&flagPhase, "phase", "", "Resume at a phase in the selected workflow")
 	rootCmd.Flags().StringVar(&flagModel, "model", "", "AI model for this run (overrides configuration)")
 	rootCmd.Flags().StringVar(&flagProvider, "provider", "", "AI CLI provider: claude or codex (overrides configuration)")
 	rootCmd.Flags().StringVar(&flagLang, "lang", "", "Interface language: en or fr (overrides configuration)")
+	rootCmd.Flags().StringVar(&flagMode, "mode", phases.ModeAuto, "Workflow mode: auto, refactor, or greenfield")
 	rootCmd.Flags().IntVar(&flagMaxTurns, "max-turns", runner.DefaultMaxTurns, "Maximum Claude turns (Claude provider only)")
 	rootCmd.Flags().BoolVar(&flagNoGit, "no-git", false, "Disable automatic git management")
 	rootCmd.AddCommand(configCmd)
@@ -91,6 +94,18 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf(l10n.Pick("inspect project directory: %w", "inspection du répertoire du projet : %w"), err)
 	}
 
+	mode := flagMode
+	if mode == phases.ModeAuto {
+		mode, err = detectMode(absDir)
+		if err != nil {
+			return fmt.Errorf(l10n.Pick("detect workflow mode: %w", "détection du mode de travail : %w"), err)
+		}
+	}
+	workflow, err := phases.ForMode(mode)
+	if err != nil {
+		return err
+	}
+
 	// Check the selected agent CLI.
 	if err := checkProvider(cfg.Provider); err != nil {
 		return err
@@ -99,24 +114,40 @@ func run(cmd *cobra.Command, args []string) error {
 	// Determine start phase
 	startPhase := 0
 	if flagPhase != "" {
-		idx := phases.IndexOf(flagPhase)
+		idx := workflow.IndexOf(flagPhase)
 		if idx < 0 {
-			return fmt.Errorf(l10n.Pick("unknown phase: %q. Available phases: diagnostic, safety, security, structure, readability, devil", "phase inconnue : %q. Phases disponibles : diagnostic, safety, security, structure, readability, devil"), flagPhase)
+			return fmt.Errorf(l10n.Pick("unknown phase %q for %s mode. Available phases: %s", "phase %q inconnue pour le mode %s. Phases disponibles : %s"), flagPhase, workflow.Mode, strings.Join(workflow.PhaseIDs(), ", "))
 		}
 		startPhase = idx
 	}
 
 	// Load embedded prompts
-	prompts, err := loadPrompts(cfg.Language)
+	prompts, err := loadPrompts(cfg.Language, workflow)
 	if err != nil {
 		return fmt.Errorf(l10n.Pick("load prompts: %w", "chargement des prompts : %w"), err)
 	}
 
 	// Launch TUI
-	m := tui.NewModel(absDir, startPhase, flagNoGit, cfg.Provider, cfg.Model, flagMaxTurns, cfg.Language, prompts)
+	m := tui.NewModel(absDir, startPhase, flagNoGit, cfg.Provider, cfg.Model, flagMaxTurns, cfg.Language, prompts, workflow)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI: %w", err)
 	}
 	return nil
+}
+
+func detectMode(projectDir string) (string, error) {
+	entries, err := os.ReadDir(projectDir)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		switch entry.Name() {
+		case ".git", ".gitkeep", ".DS_Store", "refactor-logs":
+			continue
+		default:
+			return phases.ModeRefactor, nil
+		}
+	}
+	return phases.ModeGreenfield, nil
 }

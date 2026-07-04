@@ -8,7 +8,7 @@ import (
 	"github.com/Morialkar/yvcdb/internal/phases"
 )
 
-//go:embed prompts/*/*.md
+//go:embed prompts/*/*/*.md
 var promptsFS embed.FS
 
 func checkProvider(provider string) error {
@@ -21,10 +21,17 @@ func checkProvider(provider string) error {
 	return nil
 }
 
-func loadPrompts(language string) (map[string]string, error) {
-	prompts := make(map[string]string, len(phases.All))
-	for _, p := range phases.All {
-		data, err := promptsFS.ReadFile("prompts/" + language + "/" + p.PromptFile)
+func loadPrompts(language string, workflows ...phases.Workflow) (map[string]string, error) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		return nil, err
+	}
+	if len(workflows) > 0 {
+		workflow = workflows[0]
+	}
+	prompts := make(map[string]string, len(workflow.Phases))
+	for _, p := range workflow.Phases {
+		data, err := promptsFS.ReadFile("prompts/" + language + "/" + workflow.Mode + "/" + p.PromptFile)
 		if err != nil {
 			return nil, fmt.Errorf("prompt %s: %w", p.PromptFile, err)
 		}

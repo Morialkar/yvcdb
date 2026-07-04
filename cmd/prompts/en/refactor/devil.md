@@ -13,7 +13,9 @@ Your role is to find what was missed, minimized, or poorly done in the previous 
 
 ### Completeness
 - [ ] Are any unresolved `UNCLEAR:` markers left in the code? (If yes, list them)
-- [ ] Are any `SECURITY_REVIEW:` markers unaddressed? (If yes, are they acceptable or blocking?)
+- [ ] Are any `REQUIRES_REVIEW:` markers unaddressed? (If yes, are they acceptable or blocking?)
+- [ ] Are any `ASSUMPTION:` or `DECISION_REQUIRED:` markers unresolved or unapproved?
+- [ ] Can the human reviewer explain every generated line?
 - [ ] Are any `DUPLICATE:` markers unresolved? (If yes, is that intentional?)
 
 ### Tests
