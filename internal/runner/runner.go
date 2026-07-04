@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -233,49 +232,24 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		if maxTurns <= 0 {
 			maxTurns = DefaultMaxTurns
 		}
-		provider := opts.Provider
-		if provider == "" {
-			provider = "claude"
-		}
-		var cmd *exec.Cmd
-		if provider == "codex" {
-			prompt := systemPrompt + "\n\n---\n\n" + userPrompt
-			args := []string{"-a", "never", "exec", "--json", "--color", "never", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "-C", projectDir}
-			if model := strings.TrimSpace(opts.Model); model != "" {
-				args = append(args, "--model", model)
-			}
-			args = append(args, prompt)
-			cmd = exec.CommandContext(ctx, "codex", args...)
-		} else {
-			args := []string{
-				"-p", userPrompt,
-				"--append-system-prompt", systemPrompt,
-				"--allowedTools", "Read,Write,Edit,Bash,Glob,Grep",
-				"--output-format", "stream-json",
-				"--verbose",
-				"--max-turns", fmt.Sprint(maxTurns),
-			}
-			if model := strings.TrimSpace(opts.Model); model != "" {
-				args = append(args, "--model", model)
-			}
-			cmd = exec.CommandContext(ctx, "claude", args...)
-		}
+		selected := selectProvider(opts.Provider)
+		cmd := selected.buildCommand(ctx, projectDir, systemPrompt, userPrompt, opts.Model, maxTurns)
 		cmd.Dir = projectDir
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			failBeforeStart(fmt.Errorf("open %s stdout: %w", provider, err))
+			failBeforeStart(fmt.Errorf("open %s stdout: %w", selected.name, err))
 			return
 		}
 		// stderr: forward raw (warnings, auth errors)
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
-			failBeforeStart(fmt.Errorf("open %s stderr: %w", provider, err))
+			failBeforeStart(fmt.Errorf("open %s stderr: %w", selected.name, err))
 			return
 		}
 
 		if err := cmd.Start(); err != nil {
-			failBeforeStart(fmt.Errorf("start %s CLI: %w", provider, err))
+			failBeforeStart(fmt.Errorf("start %s CLI: %w", selected.name, err))
 			return
 		}
 
@@ -293,7 +267,7 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 				}
 			}
 			if err := sc.Err(); err != nil {
-				stderrScanErr = fmt.Errorf("read %s stderr: %w", provider, err)
+				stderrScanErr = fmt.Errorf("read %s stderr: %w", selected.name, err)
 				// drain so the subprocess is not blocked writing to a full pipe
 				_, _ = io.Copy(io.Discard, stderr)
 			}
@@ -312,33 +286,11 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 				}
 			}
 
-			if provider == "codex" {
-				var ev codexEvent
-				if err := json.Unmarshal([]byte(raw), &ev); err != nil {
-					if t := strings.TrimSpace(raw); t != "" {
-						lineCh <- t
-					}
-					continue
-				}
-				for _, line := range codexEventToLines(ev) {
-					lineCh <- line
-				}
-				continue
-			}
-
-			var ev streamEvent
-			if err := json.Unmarshal([]byte(raw), &ev); err != nil {
-				// not JSON (startup messages etc.) — forward as-is
-				if t := strings.TrimSpace(raw); t != "" {
-					lineCh <- t
-				}
-				continue
-			}
-			if ev.Type == "result" && ev.Subtype == "error_max_turns" {
+			lines, reachedMaxTurns := selected.parseLine(raw, opts.Language)
+			if reachedMaxTurns {
 				maxTurnsReached = true
 			}
-
-			for _, line := range eventToLines(ev, opts.Language) {
+			for _, line := range lines {
 				lineCh <- line
 			}
 		}
@@ -356,11 +308,11 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		close(lineCh)
 
 		var runErr error
-		if waitErr != nil && !(provider == "claude" && maxTurnsReached) && !errors.Is(ctx.Err(), context.Canceled) {
-			runErr = fmt.Errorf("%s CLI failed: %w", provider, waitErr)
+		if waitErr != nil && !selected.waitSucceeded(waitErr, ctx.Err(), maxTurnsReached) {
+			runErr = fmt.Errorf("%s CLI failed: %w", selected.name, waitErr)
 		}
 		if stdoutScanErr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("read %s stdout: %w", provider, stdoutScanErr))
+			runErr = errors.Join(runErr, fmt.Errorf("read %s stdout: %w", selected.name, stdoutScanErr))
 		}
 		if stderrScanErr != nil {
 			runErr = errors.Join(runErr, stderrScanErr)
