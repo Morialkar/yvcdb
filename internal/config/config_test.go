@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -71,19 +72,60 @@ func TestSuggestedModel(t *testing.T) {
 	if got := SuggestedModel("codex"); got != "gpt-5.4" {
 		t.Fatalf("codex model: %q", got)
 	}
+	if got := SuggestedModel("opencode"); got != "" {
+		t.Fatalf("opencode model: %q", got)
+	}
 }
 
-func TestLoadNormalizesInvalidValues(t *testing.T) {
+func TestLoadNormalizesInvalidLanguage(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("YVCDB_CONFIG_HOME", dir)
-	if err := Save(Config{Language: "de"}); err != nil {
+	if err := Save(Config{Language: "de", Provider: "codex"}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg != Default() {
-		t.Fatalf("got %+v, want defaults %+v", cfg, Default())
+	if cfg.Language != DefaultLanguage || cfg.Provider != "codex" || cfg.Model != "gpt-5.4" {
+		t.Fatalf("language not normalized correctly: %+v", cfg)
 	}
+}
+
+func TestLoadRejectsInvalidProvider(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("YVCDB_CONFIG_HOME", dir)
+	if err := Save(Config{Language: "en", Provider: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil {
+		t.Fatal("expected invalid provider error")
+	} else if got := err.Error(); got == "" || !containsAll(got, []string{"claude", "codex", "opencode"}) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSaveAndLoadOpenCode(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("YVCDB_CONFIG_HOME", dir)
+	want := Config{Language: "en", Provider: "opencode", Model: ""}
+	if err := Save(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func containsAll(s string, parts []string) bool {
+	for _, part := range parts {
+		if !strings.Contains(s, part) {
+			return false
+		}
+	}
+	return true
 }

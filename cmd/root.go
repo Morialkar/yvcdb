@@ -48,7 +48,7 @@ func Execute() {
 func init() {
 	rootCmd.Flags().StringVar(&flagPhase, "phase", "", "Resume at a phase in the selected workflow")
 	rootCmd.Flags().StringVar(&flagModel, "model", "", "AI model for this run (overrides configuration)")
-	rootCmd.Flags().StringVar(&flagProvider, "provider", "", "AI CLI provider: claude or codex (overrides configuration)")
+	rootCmd.Flags().StringVar(&flagProvider, "provider", "", "AI CLI provider: "+strings.Join(appconfig.SupportedProviders(), ", ")+" (overrides configuration)")
 	rootCmd.Flags().StringVar(&flagLang, "lang", "", "Interface language: en or fr (overrides configuration)")
 	rootCmd.Flags().StringVar(&flagMode, "mode", phases.ModeAuto, "Workflow mode: auto, refactor, greenfield, feature, or debug")
 	rootCmd.Flags().IntVar(&flagMaxTurns, "max-turns", runner.DefaultMaxTurns, "Maximum Claude turns (Claude provider only)")
@@ -72,7 +72,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 	if flagProvider != "" {
 		if !appconfig.ValidProvider(flagProvider) {
-			return fmt.Errorf("unsupported provider %q: use claude or codex", flagProvider)
+			return fmt.Errorf("unsupported provider %q: use %s", flagProvider, strings.Join(appconfig.SupportedProviders(), ", "))
 		}
 		cfg.Provider = flagProvider
 		if flagModel == "" {

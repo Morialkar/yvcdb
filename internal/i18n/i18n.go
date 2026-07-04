@@ -15,7 +15,7 @@ func New(language string) Localizer {
 
 var messages = map[string][2]string{
 	"app.title":            {"YVCDB — Your Vibe Code Deserves Better", "YVCDB — Ton Vibe Code Mérite Mieux"},
-	"app.subtitle":         {"Claude Code / Codex CLI · Automated refactoring loop", "Claude Code / Codex CLI · Boucle de refactoring"},
+	"app.subtitle":         {"Claude Code / Codex CLI / OpenCode · Automated refactoring loop", "Claude Code / Codex CLI / OpenCode · Boucle de refactoring"},
 	"pipeline":             {"Pipeline:", "Pipeline :"},
 	"model.title":          {"%s model to use", "Modèle %s à utiliser"},
 	"model.help":           {"Enter a model alias or full model ID for the configured provider.", "Entrez un alias ou l'identifiant complet d'un modèle pour le fournisseur configuré."},

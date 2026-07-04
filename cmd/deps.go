@@ -16,6 +16,9 @@ func checkProvider(provider string) error {
 		if provider == "codex" {
 			return fmt.Errorf("Codex CLI not found: %w", err)
 		}
+		if provider == "opencode" {
+			return fmt.Errorf("OpenCode CLI not found; install OpenCode from https://opencode.ai and run `opencode auth login`: %w", err)
+		}
 		return fmt.Errorf("Claude CLI not found; install Claude Code with npm install -g @anthropic-ai/claude-code: %w", err)
 	}
 	return nil

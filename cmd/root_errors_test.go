@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -41,8 +42,18 @@ func TestDetectMode(t *testing.T) {
 
 func writeFakeClaude(t *testing.T) {
 	t.Helper()
+	writeFakeExecutable(t, "claude")
+}
+
+func writeFakeOpenCode(t *testing.T) {
+	t.Helper()
+	writeFakeExecutable(t, "opencode")
+}
+
+func writeFakeExecutable(t *testing.T, name string) {
+	t.Helper()
 	binDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
@@ -57,6 +68,20 @@ func TestRunFailsWhenConfigUnreadable(t *testing.T) {
 	}
 	if err := run(nil, nil); err == nil {
 		t.Fatal("expected configuration load error")
+	}
+}
+
+func TestRunFailsWhenConfigProviderInvalid(t *testing.T) {
+	resetFlags(t)
+	dir := t.TempDir()
+	t.Setenv("YVCDB_CONFIG_HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"language":"en","provider":"other","model":""}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(nil, nil); err == nil {
+		t.Fatal("expected invalid provider error")
+	} else if got := err.Error(); !strings.Contains(got, "claude") || !strings.Contains(got, "codex") || !strings.Contains(got, "opencode") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -98,6 +123,19 @@ func TestRunProviderOverrideSuggestsModel(t *testing.T) {
 	flagProvider = "codex"
 	withStdin(t, "", func() {
 		if err := run(nil, nil); err == nil {
+			t.Fatal("expected TUI startup failure without a TTY")
+		}
+	})
+}
+
+func TestRunAcceptsOpenCodeProviderFlag(t *testing.T) {
+	resetFlags(t)
+	t.Setenv("YVCDB_CONFIG_HOME", t.TempDir())
+	writeFakeOpenCode(t)
+
+	flagProvider = "opencode"
+	withStdin(t, "", func() {
+		if err := run(nil, []string{t.TempDir()}); err == nil {
 			t.Fatal("expected TUI startup failure without a TTY")
 		}
 	})

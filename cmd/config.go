@@ -38,7 +38,7 @@ func runConfig(_ *cobra.Command, _ []string) error {
 		cfg.Language = language
 	}
 
-	fmt.Printf("AI CLI provider [claude/codex] (%s): ", cfg.Provider)
+	fmt.Printf("AI CLI provider [%s] (%s): ", strings.Join(appconfig.SupportedProviders(), "/"), cfg.Provider)
 	provider, err := reader.ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("read provider: %w", err)
@@ -46,7 +46,7 @@ func runConfig(_ *cobra.Command, _ []string) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider != "" {
 		if !appconfig.ValidProvider(provider) {
-			return fmt.Errorf("unsupported provider %q: use claude or codex", provider)
+			return fmt.Errorf("unsupported provider %q: use %s", provider, strings.Join(appconfig.SupportedProviders(), ", "))
 		}
 		if provider != cfg.Provider {
 			cfg.Provider = provider
