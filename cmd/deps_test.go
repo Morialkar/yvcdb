@@ -10,7 +10,7 @@ import (
 )
 
 func TestLoadPromptsForEachLanguage(t *testing.T) {
-	for _, mode := range []string{phases.ModeRefactor, phases.ModeGreenfield, phases.ModeFeature} {
+	for _, mode := range []string{phases.ModeRefactor, phases.ModeGreenfield, phases.ModeFeature, phases.ModeDebug} {
 		workflow, err := phases.ForMode(mode)
 		if err != nil {
 			t.Fatal(err)

@@ -138,6 +138,35 @@ func TestFeatureWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
 	}
 }
 
+func TestDebugWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
+	dir := t.TempDir()
+	workflow, err := phases.ForMode(phases.ModeDebug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts := make(map[string]string, len(workflow.Phases))
+	for _, phase := range workflow.Phases {
+		prompts[phase.ID] = "prompt for " + phase.ID
+	}
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, workflow)
+	if len(m.Workflow.Phases) != 6 || len(m.checkItems) != 9 {
+		t.Fatalf("unexpected debug model: phases=%d checklist=%d", len(m.Workflow.Phases), len(m.checkItems))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AFTER_STANDARDS.md"), []byte("Always reproduce the bug before fixing it."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := &phaseRun{phaseIdx: 3, iteration: 1, workDir: dir}
+	systemPrompt, err := m.phaseSystemPrompt(run, workflow.Phases[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"prompt for fix", "AFTER operating rules", "Always reproduce the bug before fixing it."} {
+		if !strings.Contains(systemPrompt, required) {
+			t.Fatalf("system prompt missing %q", required)
+		}
+	}
+}
+
 func TestKeyboardStateTransitions(t *testing.T) {
 	m := newTestModel(t)
 	m.stageIdx = len(m.Workflow.Stages)

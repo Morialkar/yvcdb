@@ -134,6 +134,7 @@ yvcdb --provider codex --model gpt-5.4 /path/to/project
 yvcdb --phase security /path/to/project
 yvcdb --mode greenfield /path/to/empty-project
 yvcdb --mode feature /path/to/project
+yvcdb --mode debug /path/to/project
 yvcdb --no-git /path/to/project
 ```
 
@@ -145,7 +146,7 @@ Available flags:
 | `--model <model>` | Override the configured provider model for this run |
 | `--lang en\|fr` | Override the configured language for this run |
 | `--max-turns <n>` | Set maximum turns for Claude; default: `20`. Codex CLI has no equivalent flag |
-| `--mode auto\|refactor\|greenfield\|feature` | Select the workflow; `auto` uses greenfield only when the directory has no project files |
+| `--mode auto\|refactor\|greenfield\|feature\|debug` | Select the workflow; `auto` uses greenfield only when the directory has no project files |
 | `--phase <id>` | Start at a phase available in the selected workflow |
 | `--no-git` | Disable automatic branches, commits, worktrees, and merges |
 
@@ -183,7 +184,16 @@ The feature workflow targets adding a feature to an existing codebase and update
 5. **Verification** — validates the feature against the approved documents and runs the full existing test suite; any regression is a blocker.
 6. **Devil's advocate** — performs the final adversarial review without modifying files.
 
-`AFTER_STANDARDS.md`, once created, is injected into every later agent session. Both workflows require `ASSUMPTION`, `DECISION_REQUIRED`, and `REQUIRES_REVIEW` markers where applicable.
+The debug workflow fixes a bug in an existing codebase, starts from a required bug description, and proves the fix with a test that fails before and passes after. It runs six sequential phases:
+
+1. **Report** — requires a bug description, reads the repository and `AFTER_*.md`, and writes `AFTER_BUG.md`; no product code is generated.
+2. **Reproduction** — adds the smallest failing automated test and records it in `AFTER_BUG.md`.
+3. **Diagnosis** — documents the root cause and proposed fix strategy in `AFTER_BUG.md`; no product code is generated.
+4. **Fix** — applies the minimal fix targeting the root cause and adds regression tests together.
+5. **Verification** — proves the fix, confirms the reproduction test fails without it, and runs the full existing suite; any regression is a blocker.
+6. **Devil's advocate** — performs the final adversarial review without modifying files.
+
+`AFTER_STANDARDS.md`, once created, is injected into every later agent session. All workflows require `ASSUMPTION`, `DECISION_REQUIRED`, and `REQUIRES_REVIEW` markers where applicable.
 
 Each completed phase waits for a human decision:
 
