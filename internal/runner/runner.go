@@ -16,12 +16,13 @@ import (
 
 const (
 	// DefaultMaxTurns is the Claude turn limit used when no positive limit is supplied.
-	DefaultMaxTurns    = 20
-	previousLogLines   = 100
-	maxJSONEventBytes  = 1024 * 1024
-	toolInputRunes     = 120
-	toolResultRunes    = 200
-	commandOutputRunes = 300
+	DefaultMaxTurns          = 20
+	DefaultInactivityTimeout = 10 * time.Minute
+	previousLogLines         = 100
+	maxJSONEventBytes        = 1024 * 1024
+	toolInputRunes           = 120
+	toolResultRunes          = 200
+	commandOutputRunes       = 300
 )
 
 // streamEvent is a partial decode of claude's stream-json format.
@@ -92,11 +93,12 @@ func eventToLines(ev streamEvent, language string) []string {
 
 // Options controls an agent phase execution.
 type Options struct {
-	Provider string
-	Model    string
-	MaxTurns int
-	Feedback string
-	Language string
+	Provider          string
+	Model             string
+	MaxTurns          int
+	Feedback          string
+	Language          string
+	InactivityTimeout time.Duration
 }
 
 type codexEvent struct {
@@ -111,6 +113,78 @@ type codexEvent struct {
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+type inactivityWatchdog struct {
+	activity chan struct{}
+	stopCh   chan struct{}
+	done     chan struct{}
+	fired    chan struct{}
+}
+
+func newInactivityWatchdog(timeout time.Duration, cancel context.CancelFunc) *inactivityWatchdog {
+	w := &inactivityWatchdog{
+		activity: make(chan struct{}, 1),
+		stopCh:   make(chan struct{}),
+		done:     make(chan struct{}),
+		fired:    make(chan struct{}),
+	}
+	go func() {
+		defer close(w.done)
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		reset := func() {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(timeout)
+		}
+		for {
+			select {
+			case <-timer.C:
+				select {
+				case <-w.fired:
+				default:
+					close(w.fired)
+				}
+				cancel()
+				return
+			case <-w.activity:
+				reset()
+			case <-w.stopCh:
+				return
+			}
+		}
+	}()
+	return w
+}
+
+func (w *inactivityWatchdog) recordActivity() {
+	select {
+	case w.activity <- struct{}{}:
+	default:
+	}
+}
+
+func (w *inactivityWatchdog) stop() {
+	select {
+	case <-w.stopCh:
+	default:
+		close(w.stopCh)
+	}
+	<-w.done
+}
+
+func (w *inactivityWatchdog) firedNow() bool {
+	select {
+	case <-w.fired:
+		return true
+	default:
+		return false
+	}
 }
 
 func codexEventToLines(ev codexEvent) []string {
@@ -183,6 +257,7 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			doneCh <- fmt.Errorf("create log: %w", err)
 			return
 		}
+		var watchdog *inactivityWatchdog
 		promptFilePath := ""
 		cleanupPromptFile := func() error {
 			if promptFilePath == "" {
@@ -194,6 +269,10 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			return nil
 		}
 		finish := func(runErr error) {
+			if watchdog != nil {
+				watchdog.stop()
+				watchdog = nil
+			}
 			if cleanupErr := cleanupPromptFile(); cleanupErr != nil {
 				runErr = errors.Join(runErr, cleanupErr)
 			}
@@ -248,6 +327,10 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		if maxTurns <= 0 {
 			maxTurns = DefaultMaxTurns
 		}
+		inactivityTimeout := opts.InactivityTimeout
+		if inactivityTimeout <= 0 {
+			inactivityTimeout = DefaultInactivityTimeout
+		}
 		selected := selectProvider(opts.Provider)
 		if selected.needsPromptFile() {
 			promptFile, err := os.CreateTemp(projectDir, fmt.Sprintf(".yvcdb_%s_iter%d_*.md", phaseID, iteration))
@@ -294,6 +377,7 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			failBeforeStart(fmt.Errorf("start %s CLI: %w", selected.name, err))
 			return
 		}
+		watchdog = newInactivityWatchdog(inactivityTimeout, cancel)
 
 		// stderr forwarded as-is in background. Wait before closing lineCh.
 		var stderrWG sync.WaitGroup
@@ -303,6 +387,9 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			defer stderrWG.Done()
 			sc := bufio.NewScanner(stderr)
 			for sc.Scan() {
+				if watchdog != nil {
+					watchdog.recordActivity()
+				}
 				line := sc.Text()
 				if strings.TrimSpace(line) != "" {
 					lineCh <- "  [stderr] " + line
@@ -321,6 +408,9 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		var logErr error
 		maxTurnsReached := false
 		for sc.Scan() {
+			if watchdog != nil {
+				watchdog.recordActivity()
+			}
 			raw := sc.Text()
 			if logErr == nil {
 				if _, err := fmt.Fprintln(f, raw); err != nil {
@@ -348,7 +438,9 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		waitErr := cmd.Wait()
 
 		var runErr error
-		if waitErr != nil && !selected.waitSucceeded(waitErr, ctx.Err(), maxTurnsReached) {
+		if watchdog != nil && watchdog.firedNow() {
+			runErr = fmt.Errorf("inactivity timeout after %s", inactivityTimeout)
+		} else if waitErr != nil && !selected.waitSucceeded(waitErr, ctx.Err(), maxTurnsReached) {
 			runErr = fmt.Errorf("%s CLI failed: %w", selected.name, waitErr)
 		}
 		if stdoutScanErr != nil {

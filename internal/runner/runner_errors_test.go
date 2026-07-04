@@ -209,3 +209,111 @@ exit 7
 		t.Fatalf("unexpected lines: %q", joined)
 	}
 }
+
+func TestRunPhaseWatchdogKillsInactiveRun(t *testing.T) {
+	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := t.TempDir()
+	writeExecutable(t, binDir, "opencode", `#!/bin/sh
+set -eu
+prompt_file=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		run)
+			shift
+			;;
+		--format)
+			shift 2
+			;;
+		--auto)
+			shift
+			;;
+		-f|--file)
+			prompt_file=$2
+			shift 2
+			;;
+		--model)
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+printf '%s\n' "$prompt_file" > prompt-path.txt
+sleep 2
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	lines, err := runPhaseWithOptions(t, projectDir, logDir, "watchdog", 1, Options{Provider: "opencode", Language: "en", InactivityTimeout: 50 * time.Millisecond})
+	if err == nil || !strings.Contains(err.Error(), "inactivity timeout after") {
+		t.Fatalf("expected watchdog timeout, got err=%v lines=%#v", err, lines)
+	}
+	promptPathBytes, readErr := os.ReadFile(filepath.Join(projectDir, "prompt-path.txt"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	promptPath := strings.TrimSpace(string(promptPathBytes))
+	if _, statErr := os.Stat(promptPath); !os.IsNotExist(statErr) {
+		t.Fatalf("prompt file should be deleted after watchdog kill, stat err=%v", statErr)
+	}
+}
+
+func TestRunPhaseWatchdogResetsOnActivity(t *testing.T) {
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "opencode", `#!/bin/sh
+set -eu
+prompt_file=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		run)
+			shift
+			;;
+		--format)
+			shift 2
+			;;
+		--auto)
+			shift
+			;;
+		-f|--file)
+			prompt_file=$2
+			shift 2
+			;;
+		--model)
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+printf '%s\n' "$prompt_file" > prompt-path.txt
+printf '%s\n' '{"type":"text","part":{"text":"tick 1"}}'
+sleep 0.05
+printf '%s\n' '{"type":"text","part":{"text":"tick 2"}}'
+sleep 0.05
+printf '%s\n' '{"type":"text","part":{"text":"tick 3"}}'
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	lines, err := runPhaseWithOptions(t, t.TempDir(), t.TempDir(), "watchdog-activity", 1, Options{Provider: "opencode", Language: "en", InactivityTimeout: 200 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("expected active run to succeed, got: %v", err)
+	}
+	if joined := strings.Join(lines, "\n"); !strings.Contains(joined, "tick 1") || !strings.Contains(joined, "tick 3") {
+		t.Fatalf("unexpected lines: %q", joined)
+	}
+}
+
+func runPhaseWithOptions(t *testing.T, projectDir, logDir, timestamp string, iteration int, opts Options) ([]string, error) {
+	t.Helper()
+	lineCh := make(chan string, 64)
+	doneCh := make(chan error, 1)
+	cancel := RunPhase(projectDir, logDir, timestamp, "phase", iteration, "system prompt", opts, lineCh, doneCh)
+	defer cancel()
+	var lines []string
+	for line := range lineCh {
+		lines = append(lines, line)
+	}
+	return lines, <-doneCh
+}
