@@ -134,6 +134,7 @@ yvcdb --provider codex --model gpt-5.4 /chemin/vers/projet
 yvcdb --phase security /chemin/vers/projet
 yvcdb --mode greenfield /chemin/vers/projet-vierge
 yvcdb --mode feature /chemin/vers/projet
+yvcdb --mode debug /chemin/vers/projet
 yvcdb --no-git /chemin/vers/projet
 ```
 
@@ -145,7 +146,7 @@ Drapeaux disponibles :
 | `--model <modèle>` | Surcharge le modèle configuré pour cette exécution |
 | `--lang en\|fr` | Surcharge la langue configurée pour cette exécution |
 | `--max-turns <n>` | Nombre maximum de tours pour Claude ; défaut : `20`. Codex CLI n'a pas d'équivalent |
-| `--mode auto\|refactor\|greenfield\|feature` | Sélectionne le workflow ; `auto` choisit greenfield seulement si le dossier ne contient aucun fichier de projet |
+| `--mode auto\|refactor\|greenfield\|feature\|debug` | Sélectionne le workflow ; `auto` choisit greenfield seulement si le dossier ne contient aucun fichier de projet |
 | `--phase <id>` | Démarre à une phase offerte par le workflow sélectionné |
 | `--no-git` | Désactive branches, commits, worktrees et merges automatiques |
 
@@ -183,7 +184,16 @@ Le workflow feature cible l'ajout d'une feature à une base de code existante et
 5. **Vérification** — valide la feature contre les documents approuvés et exécute toute la suite de tests existante ; toute régression est un blocage.
 6. **Avocat du diable** — effectue la revue finale sans modifier les fichiers.
 
-Une fois créé, `AFTER_STANDARDS.md` est injecté dans chaque session suivante. Les deux workflows utilisent les marqueurs `ASSUMPTION`, `DECISION_REQUIRED` et `REQUIRES_REVIEW` lorsque requis.
+Le workflow debug corrige un bug dans une base de code existante, commence par une description de bug requise, et prouve le correctif avec un test qui échoue avant et passe après. Il exécute six phases séquentielles :
+
+1. **Rapport** — exige une description de bug, lit le dépôt et `AFTER_*.md`, et écrit `AFTER_BUG.md` ; aucun code produit n'est généré.
+2. **Reproduction** — ajoute le plus petit test en échec et l'enregistre dans `AFTER_BUG.md`.
+3. **Diagnostic** — documente la cause racine et la stratégie de correction proposée dans `AFTER_BUG.md` ; aucun code produit n'est généré.
+4. **Correctif** — applique le correctif minimal visant la cause racine et ajoute les tests de régression ensemble.
+5. **Vérification** — prouve le correctif, confirme que le test de reproduction échouerait sans lui, et exécute toute la suite existante ; toute régression est un blocage.
+6. **Avocat du diable** — effectue la revue finale sans modifier les fichiers.
+
+Une fois créé, `AFTER_STANDARDS.md` est injecté dans chaque session suivante. Tous les workflows utilisent les marqueurs `ASSUMPTION`, `DECISION_REQUIRED` et `REQUIRES_REVIEW` lorsque requis.
 
 Chaque phase complétée attend une décision humaine :
 

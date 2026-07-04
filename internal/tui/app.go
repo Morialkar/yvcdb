@@ -171,6 +171,18 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 			l10n.Pick("Every REQUIRES_REVIEW marker has received explicit human review", "Chaque marqueur REQUIRES_REVIEW a reçu une revue humaine explicite"),
 			l10n.Pick("The adversarial review has no unresolved blocker", "La revue contradictoire ne contient aucun blocage non résolu"),
 		}
+	} else if workflow.Mode == phases.ModeDebug {
+		checklistLabels = []string{
+			l10n.Pick("The bug is described with reproduction steps, expected versus actual behavior, and scope", "Le bug est décrit avec étapes de reproduction, comportement attendu versus observé, et portée"),
+			l10n.Pick("A test reproduces the bug and fails before the fix", "Un test reproduit le bug et échoue avant le correctif"),
+			l10n.Pick("The documented root cause explains the failure rather than a symptom", "La cause racine documentée explique la défaillance plutôt qu'un symptôme"),
+			l10n.Pick("The fix is minimal and targets the root cause", "Le correctif est minimal et vise la cause racine"),
+			l10n.Pick("The reproduction test passes and regression tests cover the nominal, edge, and error cases", "Le test de reproduction passe et les tests de régression couvrent les cas nominal, limite et erreur"),
+			l10n.Pick("The full existing test suite passes with no regression", "La suite de tests existante passe au complet, sans régression"),
+			l10n.Pick("Every ASSUMPTION marker has been reviewed and resolved or accepted", "Chaque marqueur ASSUMPTION a été révisé et résolu ou accepté"),
+			l10n.Pick("Every REQUIRES_REVIEW marker has received explicit human review", "Chaque marqueur REQUIRES_REVIEW a reçu une revue humaine explicite"),
+			l10n.Pick("The adversarial review has no unresolved blocker", "La revue contradictoire ne contient aucun blocage non résolu"),
+		}
 	}
 	items := make([]ChecklistItem, len(checklistLabels))
 	for i, l := range checklistLabels {
@@ -503,6 +515,12 @@ func (m Model) phaseTitle(id string) string {
 		"foundation":     {"Foundation — scaffold, tooling, and test harness", "Fondations — structure, outillage et banc de tests"},
 		"implementation": {"Implementation — production code and tests together", "Implémentation — code de production et tests ensemble"},
 		"verification":   {"Verification — rigorous quality and security checks", "Vérification — contrôles rigoureux de qualité et sécurité"},
+		"scoping":        {"Scoping — spec delta for the feature", "Cadrage — delta de spec de la feature"},
+		"impact":         {"Impact analysis — architecture delta and risks", "Analyse d'impact — delta d'architecture et risques"},
+		"report":         {"Report — required bug description and impact", "Rapport — description de bug requise et impact"},
+		"reproduction":   {"Reproduction — failing test before the fix", "Reproduction — test en échec avant le correctif"},
+		"diagnosis":      {"Diagnosis — root cause analysis", "Diagnostic — analyse de la cause racine"},
+		"fix":            {"Fix — minimal correction targeting the root cause", "Correctif — correction minimale visant la cause racine"},
 	}
 	title, ok := titles[id]
 	if !ok {
