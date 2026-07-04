@@ -10,6 +10,13 @@ YVCDB est un CLI interactif qui orchestre le refactoring structuré d'une codeba
 
 L'interface est en anglais par défaut et supporte aussi le français.
 
+## La méthodologie AFTER
+
+YVCDB est l'implémentation de référence de la moitié « Test Everything Rigorously » de la méthodologie AFTER (Architect First, Test Everything Rigorously), mon approche personnelle du développement assisté par IA, appliquée aux codebases existantes générées par IA. Les deux moitiés correspondent aux deux extrémités du workflow :
+
+- **Architect First** : aucune génération de code avant la spécification. Les specs détaillées, les fichiers de standards de qualité (`CLAUDE.md`), les contraintes explicites et les décisions d'architecture sont pris par l'humain avant que l'IA ne génère quoi que ce soit.
+- **Test Everything Rigorously** : rien n'est livré sur la confiance. Le code généré passe par des tests (cas nominaux, limites et erreurs), une revue par phases avec des points de validation humaine, et une checklist finale approuvée par l'humain. La valeur de l'ingénieure apparaît après la génération, d'où le nom.
+
 ## Prérequis
 
 - Go 1.26 ou plus récent
@@ -210,7 +217,7 @@ Les prompts de phase localisés sont embarqués depuis `cmd/prompts/en/` et `cmd
 
 ## Comment cet outil a été construit
 
-YVCDB a été développé avec deux assistants IA — Claude et Codex — selon ce que j'appelle la méthodologie **AFTER** : **Architect First, Test Everything Rigorously**. L'humain conçoit l'architecture et le workflow en amont (phases, stratégie Git, boucles d'approbation), les assistants implémentent selon ce design, puis chaque comportement est verrouillé par des tests rigoureux — incluant les chemins d'erreur, les courses et les deadlocks, dont plusieurs ont été attrapés par les tests eux-mêmes. Un article détaillant la méthodologie arrive bientôt.
+YVCDB a été développé avec deux assistants IA — Claude et Codex — selon la méthodologie AFTER décrite plus haut. L'humain conçoit l'architecture et le workflow en amont (phases, stratégie Git, boucles d'approbation), les assistants implémentent selon ce design, puis chaque comportement est verrouillé par des tests rigoureux — incluant les chemins d'erreur, les courses et les deadlocks, dont plusieurs ont été attrapés par les tests eux-mêmes. Un article détaillant la méthodologie arrive bientôt.
 
 ## Licence
 
