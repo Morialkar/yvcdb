@@ -133,6 +133,7 @@ yvcdb --model opus --lang fr --max-turns 30 /chemin/vers/projet
 yvcdb --provider codex --model gpt-5.4 /chemin/vers/projet
 yvcdb --phase security /chemin/vers/projet
 yvcdb --mode greenfield /chemin/vers/projet-vierge
+yvcdb --mode feature /chemin/vers/projet
 yvcdb --no-git /chemin/vers/projet
 ```
 
@@ -144,7 +145,7 @@ Drapeaux disponibles :
 | `--model <modèle>` | Surcharge le modèle configuré pour cette exécution |
 | `--lang en\|fr` | Surcharge la langue configurée pour cette exécution |
 | `--max-turns <n>` | Nombre maximum de tours pour Claude ; défaut : `20`. Codex CLI n'a pas d'équivalent |
-| `--mode auto\|refactor\|greenfield` | Sélectionne le workflow ; `auto` choisit greenfield seulement si le dossier ne contient aucun fichier de projet |
+| `--mode auto\|refactor\|greenfield\|feature` | Sélectionne le workflow ; `auto` choisit greenfield seulement si le dossier ne contient aucun fichier de projet |
 | `--phase <id>` | Démarre à une phase offerte par le workflow sélectionné |
 | `--no-git` | Désactive branches, commits, worktrees et merges automatiques |
 
@@ -172,6 +173,15 @@ Le workflow greenfield exécute sept phases séquentielles :
 5. **Implémentation** — livre chaque comportement et ses tests ensemble.
 6. **Vérification** — prouve exigences, couverture, erreurs et contrôles de sécurité.
 7. **Avocat du diable** — effectue la revue finale sans modifier les fichiers.
+
+Le workflow feature cible l'ajout d'une feature à une base de code existante et met à jour `AFTER_SPEC.md`, `AFTER_ARCHITECTURE.md` et `AFTER_PLAN.md` en place au fil de l'avancement. Il exécute six phases séquentielles :
+
+1. **Cadrage** — lit la base de code existante et documente un delta de spec dans `AFTER_SPEC.md`, sans générer de code produit.
+2. **Analyse d'impact** — met à jour `AFTER_ARCHITECTURE.md` en place pour refléter les modules touchés, les changements de schéma ou de migration, les changements d'API et les risques.
+3. **Planification** — met à jour `AFTER_PLAN.md` avec des tâches petites et ordonnées qui gardent le projet testable après chaque étape.
+4. **Implémentation** — livre chaque tâche approuvée avec le code produit et les tests ensemble.
+5. **Vérification** — valide la feature contre les documents approuvés et exécute toute la suite de tests existante ; toute régression est un blocage.
+6. **Avocat du diable** — effectue la revue finale sans modifier les fichiers.
 
 Une fois créé, `AFTER_STANDARDS.md` est injecté dans chaque session suivante. Les deux workflows utilisent les marqueurs `ASSUMPTION`, `DECISION_REQUIRED` et `REQUIRES_REVIEW` lorsque requis.
 

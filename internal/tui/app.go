@@ -159,6 +159,18 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 			l10n.Pick("The full test suite, coverage target, and quality checks pass", "La suite de tests, la cible de couverture et les contrôles qualité passent"),
 			l10n.Pick("The adversarial review has no unresolved blocker", "La revue contradictoire ne contient aucun blocage non résolu"),
 		}
+	} else if workflow.Mode == phases.ModeFeature {
+		checklistLabels = []string{
+			l10n.Pick("The spec delta (goals, non-goals, acceptance criteria) and inherited plus new constraints are satisfied", "Le delta de spec (buts, non-buts, critères d'acceptation) et les contraintes héritées et nouvelles sont respectés"),
+			l10n.Pick("AFTER_ARCHITECTURE.md reflects the real impact: touched modules, schema or migration changes, and API changes", "AFTER_ARCHITECTURE.md reflète l'impact réel : modules touchés, changements de schéma ou migrations, et changements d'API"),
+			l10n.Pick("Every planned task and acceptance criterion is complete", "Chaque tâche planifiée et chaque critère d'acceptation sont complétés"),
+			l10n.Pick("Tests cover the nominal case, an edge case, and an error case for each logic unit", "Les tests couvrent le cas nominal, un cas limite et un cas d'erreur pour chaque unité logique"),
+			l10n.Pick("The full existing test suite passes with no regression", "La suite de tests existante passe au complet, sans régression"),
+			l10n.Pick("The feature integrates with existing patterns instead of being grafted alongside them", "La feature s'intègre aux patterns existants au lieu d'être greffée à côté"),
+			l10n.Pick("Every ASSUMPTION marker has been reviewed and resolved or accepted", "Chaque marqueur ASSUMPTION a été révisé et résolu ou accepté"),
+			l10n.Pick("Every REQUIRES_REVIEW marker has received explicit human review", "Chaque marqueur REQUIRES_REVIEW a reçu une revue humaine explicite"),
+			l10n.Pick("The adversarial review has no unresolved blocker", "La revue contradictoire ne contient aucun blocage non résolu"),
+		}
 	}
 	items := make([]ChecklistItem, len(checklistLabels))
 	for i, l := range checklistLabels {

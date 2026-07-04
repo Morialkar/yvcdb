@@ -14,7 +14,7 @@ func TestIndexOf(t *testing.T) {
 }
 
 func TestManagedWorkflowsAreSequentialAndComplete(t *testing.T) {
-	for _, mode := range []string{ModeRefactor, ModeGreenfield} {
+	for _, mode := range []string{ModeRefactor, ModeGreenfield, ModeFeature} {
 		workflow, err := ForMode(mode)
 		if err != nil {
 			t.Fatal(err)

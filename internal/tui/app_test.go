@@ -109,6 +109,35 @@ func TestGreenfieldWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
 	}
 }
 
+func TestFeatureWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
+	dir := t.TempDir()
+	workflow, err := phases.ForMode(phases.ModeFeature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts := make(map[string]string, len(workflow.Phases))
+	for _, phase := range workflow.Phases {
+		prompts[phase.ID] = "prompt for " + phase.ID
+	}
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "fr", prompts, workflow)
+	if len(m.Workflow.Phases) != 6 || len(m.checkItems) != 9 {
+		t.Fatalf("unexpected feature model: phases=%d checklist=%d", len(m.Workflow.Phases), len(m.checkItems))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AFTER_STANDARDS.md"), []byte("Always test feature edge cases."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := &phaseRun{phaseIdx: 3, iteration: 1, workDir: dir}
+	systemPrompt, err := m.phaseSystemPrompt(run, workflow.Phases[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"prompt for implementation", m.l10n.Pick("AFTER operating rules", "Règles d'opération AFTER"), "Always test feature edge cases."} {
+		if !strings.Contains(systemPrompt, required) {
+			t.Fatalf("system prompt missing %q", required)
+		}
+	}
+}
+
 func TestKeyboardStateTransitions(t *testing.T) {
 	m := newTestModel(t)
 	m.stageIdx = len(m.Workflow.Stages)
@@ -275,6 +304,8 @@ func TestParallelStageIntegration(t *testing.T) {
 		if err := gitops.WorktreeAdd(dir, worktree, branch); err != nil {
 			t.Fatal(err)
 		}
+		parent := filepath.Dir(worktree)
+		t.Cleanup(func() { _ = os.RemoveAll(parent) })
 		status := runApproved
 		if i == 1 {
 			status = runSkipped
@@ -304,6 +335,7 @@ func TestParallelStageIntegration(t *testing.T) {
 			run.cancel()
 		}
 	}
+	m = drainActiveRuns(t, m)
 }
 
 func TestAdditionalKeyPathsAndCancellation(t *testing.T) {
@@ -371,6 +403,7 @@ func TestAdditionalKeyPathsAndCancellation(t *testing.T) {
 			run.cancel()
 		}
 	}
+	m = drainActiveRuns(t, m)
 
 	m = newTestModel(t)
 	m.state = stateFixRun
