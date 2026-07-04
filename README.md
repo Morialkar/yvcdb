@@ -133,6 +133,7 @@ yvcdb --model opus --lang fr --max-turns 30 /path/to/project
 yvcdb --provider codex --model gpt-5.4 /path/to/project
 yvcdb --phase security /path/to/project
 yvcdb --mode greenfield /path/to/empty-project
+yvcdb --mode feature /path/to/project
 yvcdb --no-git /path/to/project
 ```
 
@@ -144,7 +145,7 @@ Available flags:
 | `--model <model>` | Override the configured provider model for this run |
 | `--lang en\|fr` | Override the configured language for this run |
 | `--max-turns <n>` | Set maximum turns for Claude; default: `20`. Codex CLI has no equivalent flag |
-| `--mode auto\|refactor\|greenfield` | Select the workflow; `auto` uses greenfield only when the directory has no project files |
+| `--mode auto\|refactor\|greenfield\|feature` | Select the workflow; `auto` uses greenfield only when the directory has no project files |
 | `--phase <id>` | Start at a phase available in the selected workflow |
 | `--no-git` | Disable automatic branches, commits, worktrees, and merges |
 
@@ -172,6 +173,15 @@ The greenfield workflow runs seven sequential phases:
 5. **Implementation** — implements approved tasks with production code and tests together.
 6. **Verification** — proves requirements, coverage, errors, and security checks.
 7. **Devil's advocate** — performs the final adversarial review without modifying files.
+
+The feature workflow targets adding a feature to an existing codebase and updates `AFTER_SPEC.md`, `AFTER_ARCHITECTURE.md`, and `AFTER_PLAN.md` in place as it goes. It runs six sequential phases:
+
+1. **Scoping** — reads the existing codebase and documents a spec delta in `AFTER_SPEC.md`; no product code is generated.
+2. **Impact analysis** — updates `AFTER_ARCHITECTURE.md` in place to reflect touched modules, schema or migration changes, API changes, and risks.
+3. **Planning** — updates `AFTER_PLAN.md` with small ordered tasks that keep the project testable after each step.
+4. **Implementation** — delivers each approved task with production code and tests together.
+5. **Verification** — validates the feature against the approved documents and runs the full existing test suite; any regression is a blocker.
+6. **Devil's advocate** — performs the final adversarial review without modifying files.
 
 `AFTER_STANDARDS.md`, once created, is injected into every later agent session. Both workflows require `ASSUMPTION`, `DECISION_REQUIRED`, and `REQUIRES_REVIEW` markers where applicable.
 

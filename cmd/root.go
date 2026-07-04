@@ -50,7 +50,7 @@ func init() {
 	rootCmd.Flags().StringVar(&flagModel, "model", "", "AI model for this run (overrides configuration)")
 	rootCmd.Flags().StringVar(&flagProvider, "provider", "", "AI CLI provider: claude or codex (overrides configuration)")
 	rootCmd.Flags().StringVar(&flagLang, "lang", "", "Interface language: en or fr (overrides configuration)")
-	rootCmd.Flags().StringVar(&flagMode, "mode", phases.ModeAuto, "Workflow mode: auto, refactor, or greenfield")
+	rootCmd.Flags().StringVar(&flagMode, "mode", phases.ModeAuto, "Workflow mode: auto, refactor, greenfield, or feature")
 	rootCmd.Flags().IntVar(&flagMaxTurns, "max-turns", runner.DefaultMaxTurns, "Maximum Claude turns (Claude provider only)")
 	rootCmd.Flags().BoolVar(&flagNoGit, "no-git", false, "Disable automatic git management")
 	rootCmd.AddCommand(configCmd)

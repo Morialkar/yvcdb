@@ -15,6 +15,8 @@ const (
 	ModeRefactor = "refactor"
 	// ModeGreenfield runs the complete AFTER workflow for a new project.
 	ModeGreenfield = "greenfield"
+	// ModeFeature runs the AFTER workflow for adding a feature to an existing codebase.
+	ModeFeature = "feature"
 )
 
 // Phase describes one managed phase and its embedded prompt.
@@ -52,6 +54,15 @@ var greenfieldPhases = []Phase{
 	{ID: "devil", Label: "Phase 6", Color: lipgloss.Color("5"), PromptFile: "devil.md"},
 }
 
+var featurePhases = []Phase{
+	{ID: "scoping", Label: "Phase 0", Color: lipgloss.Color("15"), PromptFile: "scoping.md"},
+	{ID: "impact", Label: "Phase 1", Color: lipgloss.Color("2"), PromptFile: "impact.md"},
+	{ID: "planning", Label: "Phase 2", Color: lipgloss.Color("3"), PromptFile: "planning.md"},
+	{ID: "implementation", Label: "Phase 3", Color: lipgloss.Color("4"), PromptFile: "implementation.md"},
+	{ID: "verification", Label: "Phase 4", Color: lipgloss.Color("6"), PromptFile: "verification.md"},
+	{ID: "devil", Label: "Phase 5", Color: lipgloss.Color("1"), PromptFile: "devil.md"},
+}
+
 // All is retained as the public refactor phase list for API compatibility.
 var All = refactorPhases
 
@@ -62,6 +73,8 @@ func ForMode(mode string) (Workflow, error) {
 		return sequentialWorkflow(ModeRefactor, refactorPhases), nil
 	case ModeGreenfield:
 		return sequentialWorkflow(ModeGreenfield, greenfieldPhases), nil
+	case ModeFeature:
+		return sequentialWorkflow(ModeFeature, featurePhases), nil
 	default:
 		return Workflow{}, fmt.Errorf("unsupported workflow mode %q", mode)
 	}
