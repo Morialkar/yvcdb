@@ -36,13 +36,86 @@ func cancelRuns(m Model) {
 }
 
 func TestNewModelDefaultsModelFromProvider(t *testing.T) {
-	m := NewModel(t.TempDir(), 2, true, "codex", "  ", 2, "en", testPrompts())
-	if m.AgentModel != "gpt-5.4" {
-		t.Fatalf("expected suggested codex model, got %q", m.AgentModel)
+	tests := []struct {
+		name     string
+		provider string
+		want     string
+	}{
+		{name: "claude", provider: "claude", want: "sonnet"},
+		{name: "codex", provider: "codex", want: "gpt-5.4"},
 	}
-	if m.stageIdx != 2 {
-		t.Fatalf("expected stage containing phase 2, got %d", m.stageIdx)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(t.TempDir(), 2, true, tt.provider, "  ", 2, "en", testPrompts())
+			if m.AgentModel != tt.want {
+				t.Fatalf("expected suggested %s model, got %q", tt.provider, m.AgentModel)
+			}
+			if m.stageIdx != 2 {
+				t.Fatalf("expected stage containing phase 2, got %d", m.stageIdx)
+			}
+		})
 	}
+}
+
+func TestNewModelKeepsOpenCodeModelBlankAndUsesOpenCodeMessage(t *testing.T) {
+	m := NewModel(t.TempDir(), 2, true, "opencode", "  ", 2, "en", testPrompts())
+	if m.AgentModel != "" {
+		t.Fatalf("expected blank OpenCode model, got %q", m.AgentModel)
+	}
+	view := m.View()
+	if !strings.Contains(view, "OpenCode default (configured in your OpenCode settings)") {
+		t.Fatalf("expected OpenCode default message, got %q", view)
+	}
+	if !strings.Contains(view, "Cost and plan usage depend on the selected model.") {
+		t.Fatalf("expected cost warning, got %q", view)
+	}
+
+	fr := NewModel(t.TempDir(), 2, true, "opencode", "  ", 2, "fr", testPrompts())
+	frView := fr.View()
+	if !strings.Contains(frView, "Modèle par défaut d'OpenCode") || !strings.Contains(frView, "configuré dans vos paramètres") {
+		t.Fatalf("expected French OpenCode default message, got %q", frView)
+	}
+}
+
+func TestOpenCodeModelSelectAllowsBlankAndShowsExplicitModel(t *testing.T) {
+	installFakeOpenCode(t)
+	blank := NewModel(t.TempDir(), 0, true, "opencode", "  ", 2, "en", testPrompts())
+	if blank.AgentModel != "" {
+		t.Fatalf("expected blank OpenCode model, got %q", blank.AgentModel)
+	}
+	updated, _ := blank.handleKey(key(tea.KeyEnter, 0))
+	blank = updated.(Model)
+	if blank.state != stateStage {
+		t.Fatalf("blank OpenCode model should advance, got state %v", blank.state)
+	}
+	blank = drainActiveRuns(t, blank)
+	cancelRuns(blank)
+
+	explicit := NewModel(t.TempDir(), 0, true, "opencode", "custom/model", 2, "en", testPrompts())
+	if explicit.AgentModel != "custom/model" {
+		t.Fatalf("expected explicit OpenCode model, got %q", explicit.AgentModel)
+	}
+	view := explicit.View()
+	if !strings.Contains(view, "custom/model") {
+		t.Fatalf("expected explicit model in view, got %q", view)
+	}
+	if strings.Contains(view, "OpenCode default (configured in your OpenCode settings)") {
+		t.Fatalf("default message should not show for explicit model, got %q", view)
+	}
+}
+
+func installFakeOpenCode(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode")
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"text","part":{"text":"opencode ready"}}'
+printf '%s\n' '{"type":"result","result":"done"}'
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func TestUpdateMessageEdgeCases(t *testing.T) {

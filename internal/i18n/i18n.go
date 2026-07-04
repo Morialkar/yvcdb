@@ -19,6 +19,7 @@ var messages = map[string][2]string{
 	"pipeline":             {"Pipeline:", "Pipeline :"},
 	"model.title":          {"%s model to use", "Modèle %s à utiliser"},
 	"model.help":           {"Enter a model alias or full model ID for the configured provider.", "Entrez un alias ou l'identifiant complet d'un modèle pour le fournisseur configuré."},
+	"model.default":        {"OpenCode default (configured in your OpenCode settings)", "Modèle par défaut d'OpenCode (configuré dans vos paramètres OpenCode)"},
 	"model.warning":        {"Cost and plan usage depend on the selected model.", "Le coût et la consommation du plan dépendent du modèle choisi."},
 	"model.prompt":         {"Model > ", "Modèle > "},
 	"confirm.quit":         {"[enter] Confirm   [esc] Quit", "[entrée] Confirmer   [esc] Quitter"},

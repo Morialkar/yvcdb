@@ -197,6 +197,9 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 	input := textinput.New()
 	input.Prompt = l10n.T("model.prompt")
 	input.Placeholder = appconfig.SuggestedModel(provider)
+	if strings.TrimSpace(input.Placeholder) == "" {
+		input.Placeholder = l10n.T("model.default")
+	}
 	input.SetValue(model)
 	input.CharLimit = modelInputCharLimit
 	input.Width = 48
@@ -322,7 +325,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case stateModelSelect:
 		switch key {
 		case "enter":
-			if model := strings.TrimSpace(m.input.Value()); model != "" {
+			if model := strings.TrimSpace(m.input.Value()); model != "" || appconfig.SuggestedModel(m.Provider) == "" {
 				m.AgentModel = model
 				m.input.Blur()
 				if !m.NoGit && !m.useGit {
@@ -600,8 +603,12 @@ func (m Model) renderGitSetup() string {
 func (m Model) renderModelSelect() string {
 	title := styleBold.Render(m.l10n.T("model.title", strings.ToUpper(m.Provider)))
 	help := styleDim.Render(m.l10n.T("model.help"))
+	extra := ""
+	if strings.TrimSpace(m.AgentModel) == "" && appconfig.SuggestedModel(m.Provider) == "" {
+		extra = "\n" + styleDim.Render(m.l10n.T("model.default"))
+	}
 	warn := styleWarn.Render(m.l10n.T("model.warning"))
-	return styleDecisionBox.Width(64).Render(title + "\n" + help + "\n\n" + m.input.View() + "\n\n" + warn + "\n" + styleDim.Render(m.l10n.T("confirm.quit")))
+	return styleDecisionBox.Width(64).Render(title + "\n" + help + "\n\n" + m.input.View() + extra + "\n\n" + warn + "\n" + styleDim.Render(m.l10n.T("confirm.quit")))
 }
 
 func (m Model) renderFeedback() string {
