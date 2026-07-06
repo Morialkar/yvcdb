@@ -18,14 +18,16 @@ import (
 
 const (
 	// DefaultMaxTurns is the Claude turn limit used when no positive limit is supplied.
-	DefaultMaxTurns          = 20
-	DefaultInactivityTimeout = 10 * time.Minute
-	promptFileExcludePattern = ".yvcdb_*.md"
-	previousLogLines         = 100
-	maxJSONEventBytes        = 1024 * 1024
-	toolInputRunes           = 120
-	toolResultRunes          = 200
-	commandOutputRunes       = 300
+	DefaultMaxTurns           = 20
+	DefaultInactivityTimeout  = 10 * time.Minute
+	promptFileExcludePattern  = ".yvcdb_*"
+	resumeMarkerFileName      = ".yvcdb_resume.json"
+	resumeMarkerSchemaVersion = 1
+	previousLogLines          = 100
+	maxJSONEventBytes         = 1024 * 1024
+	toolInputRunes            = 120
+	toolResultRunes           = 200
+	commandOutputRunes        = 300
 )
 
 // streamEvent is a partial decode of claude's stream-json format.
@@ -102,6 +104,23 @@ type Options struct {
 	Feedback          string
 	Language          string
 	InactivityTimeout time.Duration
+	ResumeMarker      *ResumeMarker
+}
+
+// ResumeMarker stores the metadata needed to resume an interrupted phase.
+type ResumeMarker struct {
+	SchemaVersion    int    `json:"schemaVersion"`
+	WorkflowMode     string `json:"workflowMode"`
+	PhaseIndex       int    `json:"phaseIndex"`
+	PhaseID          string `json:"phaseID"`
+	Iteration        int    `json:"iteration"`
+	BranchName       string `json:"branchName"`
+	Provider         string `json:"provider"`
+	Model            string `json:"model"`
+	SessionTimestamp string `json:"sessionTimestamp"`
+	PID              int    `json:"pid"`
+	PromptFilePath   string `json:"promptFilePath,omitempty"`
+	LogFilePath      string `json:"logFilePath"`
 }
 
 type codexEvent struct {
@@ -190,6 +209,41 @@ func (w *inactivityWatchdog) firedNow() bool {
 	}
 }
 
+// WriteResumeMarker writes a resume marker JSON file to path.
+func WriteResumeMarker(path string, marker ResumeMarker) error {
+	marker.SchemaVersion = resumeMarkerSchemaVersion
+	data, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal resume marker: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write resume marker: %w", err)
+	}
+	return nil
+}
+
+// ParseResumeMarker decodes a resume marker and validates its schema version.
+func ParseResumeMarker(data []byte) (ResumeMarker, error) {
+	var marker ResumeMarker
+	if err := json.Unmarshal(data, &marker); err != nil {
+		return ResumeMarker{}, fmt.Errorf("parse resume marker: %w", err)
+	}
+	if marker.SchemaVersion != resumeMarkerSchemaVersion {
+		return ResumeMarker{}, fmt.Errorf("resume marker schema version %d unsupported", marker.SchemaVersion)
+	}
+	return marker, nil
+}
+
+// ReadResumeMarker reads and parses a resume marker from path.
+func ReadResumeMarker(path string) (ResumeMarker, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ResumeMarker{}, err
+	}
+	return ParseResumeMarker(data)
+}
+
 func codexEventToLines(ev codexEvent) []string {
 	if strings.TrimSpace(ev.Message) != "" && (ev.Type == "error" || ev.Type == "turn.failed") {
 		return []string{"  [error] " + ev.Message}
@@ -262,22 +316,30 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		}
 		var watchdog *inactivityWatchdog
 		promptFilePath := ""
-		cleanupPromptFile := func() error {
-			if promptFilePath == "" {
-				return nil
+		resumeMarkerPath := ""
+		cleanupResumeArtifacts := func() error {
+			var runErr error
+			if promptFilePath != "" {
+				if err := os.Remove(promptFilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+					runErr = errors.Join(runErr, fmt.Errorf("remove prompt file: %w", err))
+				}
 			}
-			if err := os.Remove(promptFilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("remove prompt file: %w", err)
+			if resumeMarkerPath != "" {
+				if err := os.Remove(resumeMarkerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+					runErr = errors.Join(runErr, fmt.Errorf("remove resume marker: %w", err))
+				}
 			}
-			return nil
+			return runErr
 		}
-		finish := func(runErr error) {
+		finish := func(runErr error, retainResumeArtifacts bool) {
 			if watchdog != nil {
 				watchdog.stop()
 				watchdog = nil
 			}
-			if cleanupErr := cleanupPromptFile(); cleanupErr != nil {
-				runErr = errors.Join(runErr, cleanupErr)
+			if !retainResumeArtifacts {
+				if cleanupErr := cleanupResumeArtifacts(); cleanupErr != nil {
+					runErr = errors.Join(runErr, cleanupErr)
+				}
 			}
 			if closeErr := f.Close(); closeErr != nil {
 				runErr = errors.Join(runErr, fmt.Errorf("close event log: %w", closeErr))
@@ -286,7 +348,7 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			doneCh <- runErr
 		}
 		failBeforeStart := func(runErr error) {
-			finish(runErr)
+			finish(runErr, false)
 		}
 		projectLabel := "Project"
 		if opts.Language == "fr" {
@@ -363,6 +425,27 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 					return
 				}
 				lineCh <- notice
+			}
+		}
+		if opts.ResumeMarker != nil {
+			if _, err := git.EnsureInfoExcludeEntry(projectDir, promptFileExcludePattern); err != nil {
+				failBeforeStart(fmt.Errorf("exclude prompt files: %w", err))
+				return
+			}
+			resumeMarkerPath = filepath.Join(projectDir, resumeMarkerFileName)
+			marker := *opts.ResumeMarker
+			marker.SchemaVersion = resumeMarkerSchemaVersion
+			marker.PhaseID = phaseID
+			marker.Iteration = iteration
+			marker.Provider = opts.Provider
+			marker.Model = opts.Model
+			marker.SessionTimestamp = timestamp
+			marker.PID = os.Getpid()
+			marker.PromptFilePath = promptFilePath
+			marker.LogFilePath = logFile
+			if err := WriteResumeMarker(resumeMarkerPath, marker); err != nil {
+				failBeforeStart(fmt.Errorf("write resume marker: %w", err))
+				return
 			}
 		}
 		cmd := selected.buildCommand(ctx, projectDir, systemPrompt, userPrompt, opts.Model, promptFilePath, maxTurns)
@@ -459,7 +542,8 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		if logErr != nil {
 			runErr = errors.Join(runErr, logErr)
 		}
-		finish(runErr)
+		retainResumeArtifacts := ctx.Err() == context.Canceled && (watchdog == nil || !watchdog.firedNow())
+		finish(runErr, retainResumeArtifacts)
 	}()
 	return cancel
 }

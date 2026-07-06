@@ -120,7 +120,7 @@ func TestWorktreeRebaseAndFastForward(t *testing.T) {
 
 func TestEnsureInfoExcludeEntryIsIdempotent(t *testing.T) {
 	dir := initRepo(t)
-	entry := ".yvcdb_*.md"
+	entry := ".yvcdb_*"
 	added, err := EnsureInfoExcludeEntry(dir, entry)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestEnsureInfoExcludeEntryResolvesWorktreeCommonGitDir(t *testing.T) {
 	t.Cleanup(func() {
 		_ = WorktreeRemove(dir, worktree)
 	})
-	entry := ".yvcdb_*.md"
+	entry := ".yvcdb_*"
 	if _, err := EnsureInfoExcludeEntry(worktree, entry); err != nil {
 		t.Fatal(err)
 	}

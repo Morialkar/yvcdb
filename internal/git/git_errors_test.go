@@ -187,7 +187,7 @@ func TestCommitAllRespectsPromptFileExclude(t *testing.T) {
 	if err := os.WriteFile(promptPath, []byte("system prompt\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*.md"); err != nil {
+	if added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*"); err != nil {
 		t.Fatal(err)
 	} else if !added {
 		t.Fatal("expected exclusion entry to be added")
@@ -204,8 +204,34 @@ func TestCommitAllRespectsPromptFileExclude(t *testing.T) {
 	}
 }
 
+func TestCommitAllRespectsResumeMarkerExclude(t *testing.T) {
+	dir := initRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "source.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(dir, ".yvcdb_resume.json")
+	if err := os.WriteFile(markerPath, []byte(`{"schemaVersion":1,"workflowMode":"refactor"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*"); err != nil {
+		t.Fatal(err)
+	} else if !added {
+		t.Fatal("expected exclusion entry to be added")
+	}
+	if err := CommitAll(dir, "resume marker snapshot"); err != nil {
+		t.Fatal(err)
+	}
+	tree := runGitOutput(t, dir, "ls-tree", "-r", "--name-only", "HEAD")
+	if !strings.Contains(tree, "source.go") {
+		t.Fatalf("expected committed source file, got: %q", tree)
+	}
+	if strings.Contains(tree, ".yvcdb_resume.json") {
+		t.Fatalf("resume marker should not be committed, tree: %q", tree)
+	}
+}
+
 func TestEnsureInfoExcludeEntrySkipsNonRepo(t *testing.T) {
-	if added, err := EnsureInfoExcludeEntry(t.TempDir(), ".yvcdb_*.md"); err != nil {
+	if added, err := EnsureInfoExcludeEntry(t.TempDir(), ".yvcdb_*"); err != nil {
 		t.Fatal(err)
 	} else if added {
 		t.Fatal("non-repo should not add an entry")
@@ -218,7 +244,7 @@ func TestEnsureInfoExcludeEntryCreatesMissingInfoDir(t *testing.T) {
 	if err := os.RemoveAll(infoDir); err != nil {
 		t.Fatal(err)
 	}
-	added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*.md")
+	added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +256,7 @@ func TestEnsureInfoExcludeEntryCreatesMissingInfoDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), ".yvcdb_*.md") {
+	if !strings.Contains(string(data), ".yvcdb_*") {
 		t.Fatalf("exclude entry missing: %q", data)
 	}
 }

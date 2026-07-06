@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	gitpkg "github.com/Morialkar/yvcdb/internal/git"
 )
 
 func TestCodexEventToLinesEmptyPayloads(t *testing.T) {
@@ -102,6 +104,77 @@ func TestProviderHelpersCoverEdgeCases(t *testing.T) {
 			t.Fatal("opencode should fail on non-canceled error")
 		}
 	})
+}
+
+func TestResumeMarkerRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, resumeMarkerFileName)
+	want := ResumeMarker{
+		WorkflowMode:     "refactor",
+		PhaseIndex:       2,
+		PhaseID:          "security",
+		Iteration:        3,
+		BranchName:       "refactor/20240706_120000/security",
+		Provider:         "opencode",
+		Model:            "custom/model",
+		SessionTimestamp: "20240706_120000",
+		PID:              12345,
+		PromptFilePath:   filepath.Join(dir, ".yvcdb_security_iter3_abcd.md"),
+		LogFilePath:      filepath.Join(dir, "logs", "20240706_120000_security_iter3.md"),
+	}
+	if err := WriteResumeMarker(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadResumeMarker(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != resumeMarkerSchemaVersion {
+		t.Fatalf("unexpected schema version: %d", got.SchemaVersion)
+	}
+	want.SchemaVersion = resumeMarkerSchemaVersion
+	if got != want {
+		t.Fatalf("round-trip mismatch:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestReadResumeMarkerRejectsInvalidPayloads(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "malformed", data: "not json"},
+		{name: "wrong schema version", data: `{"schemaVersion":2,"phaseID":"security"}`},
+		{name: "missing schema version", data: `{"phaseID":"security"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, tt.name+".json")
+			if err := os.WriteFile(path, []byte(tt.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ReadResumeMarker(path); err == nil {
+				t.Fatal("expected parse error")
+			}
+		})
+	}
+}
+
+func TestReadResumeMarkerIgnoresUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, resumeMarkerFileName)
+	data := []byte(`{"schemaVersion":1,"workflowMode":"refactor","phaseIndex":3,"phaseID":"security","iteration":2,"branchName":"refactor/ts/security","provider":"opencode","model":"custom/model","sessionTimestamp":"20240706_120000","pid":123,"logFilePath":"/tmp/log.md","extra":"ignored"}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadResumeMarker(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PhaseID != "security" || got.Provider != "opencode" || got.SchemaVersion != resumeMarkerSchemaVersion {
+		t.Fatalf("unexpected marker contents: %#v", got)
+	}
 }
 
 func runPhaseWith(t *testing.T, projectDir, logDir, timestamp string, iteration int, opts Options) ([]string, error) {
@@ -272,6 +345,8 @@ printf '\n' >&2
 
 func TestRunPhaseOpenCodeNonZeroExitSurfacesStderr(t *testing.T) {
 	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := t.TempDir()
 	writeExecutable(t, binDir, "opencode", `#!/bin/sh
 set -eu
 while [ $# -gt 0 ]; do
@@ -295,13 +370,16 @@ exit 7
 `)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	lines, err := runPhaseWith(t, t.TempDir(), t.TempDir(), "opencode-error", 1, Options{Provider: "opencode", Language: "en"})
+	lines, err := runPhaseWith(t, projectDir, logDir, "opencode-error", 1, Options{Provider: "opencode", Language: "en", ResumeMarker: &ResumeMarker{WorkflowMode: "refactor", PhaseIndex: 1, BranchName: "refactor/opencode-error/phase"}})
 	if err == nil {
 		t.Fatal("expected non-zero OpenCode exit to fail")
 	}
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "OpenCode is running with auto-approved permissions.") || !strings.Contains(joined, "[stderr] opencode failure") {
 		t.Fatalf("unexpected lines: %q", joined)
+	}
+	if _, statErr := os.Stat(filepath.Join(projectDir, resumeMarkerFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("resume marker should be deleted after failure, stat err=%v", statErr)
 	}
 }
 
@@ -340,7 +418,7 @@ sleep 2
 `)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	lines, err := runPhaseWithOptions(t, projectDir, logDir, "watchdog", 1, Options{Provider: "opencode", Language: "en", InactivityTimeout: 50 * time.Millisecond})
+	lines, err := runPhaseWithOptions(t, projectDir, logDir, "watchdog", 1, Options{Provider: "opencode", Language: "en", InactivityTimeout: 50 * time.Millisecond, ResumeMarker: &ResumeMarker{WorkflowMode: "refactor", PhaseIndex: 1, BranchName: "refactor/watchdog/phase"}})
 	if err == nil || !strings.Contains(err.Error(), "inactivity timeout after") {
 		t.Fatalf("expected watchdog timeout, got err=%v lines=%#v", err, lines)
 	}
@@ -352,9 +430,12 @@ sleep 2
 	if _, statErr := os.Stat(promptPath); !os.IsNotExist(statErr) {
 		t.Fatalf("prompt file should be deleted after watchdog kill, stat err=%v", statErr)
 	}
+	if _, statErr := os.Stat(filepath.Join(projectDir, resumeMarkerFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("resume marker should be deleted after watchdog kill, stat err=%v", statErr)
+	}
 }
 
-func TestRunPhaseCancelDeletesPromptFile(t *testing.T) {
+func TestRunPhaseCancelRetainsPromptFileAndMarker(t *testing.T) {
 	binDir := t.TempDir()
 	projectDir := t.TempDir()
 	logDir := t.TempDir()
@@ -395,8 +476,10 @@ sleep 2
 		Provider:          "opencode",
 		Language:          "en",
 		InactivityTimeout: 5 * time.Second,
+		ResumeMarker:      &ResumeMarker{WorkflowMode: "refactor", PhaseIndex: 1, BranchName: "refactor/cancel/phase"},
 	}, lineCh, doneCh)
 	waitForFile(t, filepath.Join(projectDir, "prompt-path.txt"))
+	waitForFile(t, filepath.Join(projectDir, resumeMarkerFileName))
 	cancel()
 	for range lineCh {
 	}
@@ -408,8 +491,11 @@ sleep 2
 		t.Fatal(err)
 	}
 	promptPath := strings.TrimSpace(string(promptPathBytes))
-	if _, statErr := os.Stat(promptPath); !os.IsNotExist(statErr) {
-		t.Fatalf("prompt file should be deleted after cancellation, stat err=%v", statErr)
+	if _, statErr := os.Stat(promptPath); statErr != nil {
+		t.Fatalf("prompt file should be retained after cancellation, stat err=%v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(projectDir, resumeMarkerFileName)); statErr != nil {
+		t.Fatalf("resume marker should be retained after cancellation, stat err=%v", statErr)
 	}
 }
 
@@ -456,6 +542,310 @@ printf '%s\n' '{"type":"text","part":{"text":"tick 3"}}'
 	}
 	if joined := strings.Join(lines, "\n"); !strings.Contains(joined, "tick 1") || !strings.Contains(joined, "tick 3") {
 		t.Fatalf("unexpected lines: %q", joined)
+	}
+}
+
+func TestRunPhaseWritesResumeMarkerAndRetainsItOnCancel(t *testing.T) {
+	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := t.TempDir()
+	writeExecutable(t, binDir, "opencode", `#!/bin/sh
+set -eu
+prompt_file=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		run)
+			shift
+			;;
+		--format)
+			shift 2
+			;;
+		--auto)
+			shift
+			;;
+		-f|--file)
+			prompt_file=$2
+			shift 2
+			;;
+		--model)
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+printf '%s\n' "$prompt_file" > prompt-path.txt
+cp "$prompt_file" prompt-copy.txt
+sleep 2
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	lineCh := make(chan string, 64)
+	doneCh := make(chan error, 1)
+	cancel := RunPhase(projectDir, logDir, "opencode-session", "security", 1, "system prompt", Options{
+		Provider: "opencode",
+		Language: "en",
+		Model:    "custom/model",
+		ResumeMarker: &ResumeMarker{
+			WorkflowMode: "refactor",
+			PhaseIndex:   4,
+			BranchName:   "refactor/20240706_120000/implementation",
+		},
+	}, lineCh, doneCh)
+	waitForFile(t, filepath.Join(projectDir, "prompt-path.txt"))
+	waitForFile(t, filepath.Join(projectDir, resumeMarkerFileName))
+	marker, err := ReadResumeMarker(filepath.Join(projectDir, resumeMarkerFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if marker.SchemaVersion != resumeMarkerSchemaVersion {
+		t.Fatalf("unexpected schema version: %d", marker.SchemaVersion)
+	}
+	if marker.WorkflowMode != "refactor" || marker.PhaseIndex != 4 || marker.PhaseID != "security" || marker.Iteration != 1 {
+		t.Fatalf("unexpected marker identity: %#v", marker)
+	}
+	if marker.BranchName != "refactor/20240706_120000/implementation" || marker.Provider != "opencode" || marker.Model != "custom/model" {
+		t.Fatalf("unexpected marker provider data: %#v", marker)
+	}
+	if marker.SessionTimestamp != "opencode-session" || marker.PID != os.Getpid() {
+		t.Fatalf("unexpected marker runtime data: %#v", marker)
+	}
+	promptPathBytes, err := os.ReadFile(filepath.Join(projectDir, "prompt-path.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptPath := strings.TrimSpace(string(promptPathBytes))
+	if marker.PromptFilePath != promptPath {
+		t.Fatalf("prompt file path mismatch: marker=%q prompt-path=%q", marker.PromptFilePath, promptPath)
+	}
+	wantLogPath := filepath.Join(logDir, "opencode-session_security_iter1.md")
+	if marker.LogFilePath != wantLogPath {
+		t.Fatalf("unexpected log path: got %q want %q", marker.LogFilePath, wantLogPath)
+	}
+	promptCopy, err := os.ReadFile(filepath.Join(projectDir, "prompt-copy.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(promptCopy) != "system prompt" {
+		t.Fatalf("prompt file content mismatch: %q", promptCopy)
+	}
+	cancel()
+	for range lineCh {
+	}
+	if err := <-doneCh; err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(promptPath); statErr != nil {
+		t.Fatalf("prompt file should be retained after cancellation, stat err=%v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(projectDir, resumeMarkerFileName)); statErr != nil {
+		t.Fatalf("resume marker should be retained after cancellation, stat err=%v", statErr)
+	}
+}
+
+func TestRunPhaseWithoutResumeMarkerDoesNotCreateMarkerFile(t *testing.T) {
+	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := t.TempDir()
+	writeExecutable(t, binDir, "opencode", `#!/bin/sh
+set -eu
+while [ $# -gt 0 ]; do
+	case "$1" in
+		run)
+			shift
+			;;
+		--format)
+			shift 2
+			;;
+		--auto)
+			shift
+			;;
+		-f|--file)
+			shift 2
+			;;
+		--model)
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+printf '%s\n' '{"type":"text","part":{"text":"ok"}}'
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := runPhaseWith(t, projectDir, logDir, "disabled", 1, Options{Provider: "opencode", Language: "en"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(filepath.Join(projectDir, resumeMarkerFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("resume marker should not be created by default, stat err=%v", statErr)
+	}
+}
+
+func TestRunPhaseEnsuresPromptExcludeWithoutResumeMarker(t *testing.T) {
+	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := t.TempDir()
+	if err := gitpkg.Init(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "README.md"), []byte("repo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, binDir, "opencode", `#!/bin/sh
+set -eu
+while [ $# -gt 0 ]; do
+	case "$1" in
+		run)
+			shift
+			;;
+		--format)
+			shift 2
+			;;
+		--auto)
+			shift
+			;;
+		-f|--file)
+			shift 2
+			;;
+		--model)
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+printf '%s\n' '{"type":"text","part":{"text":"ok"}}'
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := runPhaseWith(t, projectDir, logDir, "exclude", 1, Options{Provider: "opencode", Language: "en"}); err != nil {
+		t.Fatal(err)
+	}
+	excludePath := filepath.Join(projectDir, ".git", "info", "exclude")
+	data, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), promptFileExcludePattern) {
+		t.Fatalf("exclude entry missing: %q", data)
+	}
+}
+
+func TestRunPhaseWritesResumeMarkerForClaudeAndDeletesItOnCompletion(t *testing.T) {
+	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := t.TempDir()
+	writeExecutable(t, binDir, "claude", `#!/bin/sh
+set -eu
+printf '%s\n' '{"type":"result","result":"done"}'
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := runPhaseWith(t, projectDir, logDir, "claude-resume", 1, Options{
+		Provider: "claude",
+		Language: "en",
+		ResumeMarker: &ResumeMarker{
+			WorkflowMode: "refactor",
+			PhaseIndex:   2,
+			BranchName:   "refactor/claude-resume/phase",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(filepath.Join(projectDir, resumeMarkerFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("resume marker should be deleted after completion, stat err=%v", statErr)
+	}
+}
+
+func TestRunPhaseRetainsResumeMarkerForClaudeOnCancel(t *testing.T) {
+	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := t.TempDir()
+	writeExecutable(t, binDir, "claude", `#!/bin/sh
+set -eu
+sleep 2
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	lineCh := make(chan string, 64)
+	doneCh := make(chan error, 1)
+	cancel := RunPhase(projectDir, logDir, "claude-cancel", "phase", 1, "system prompt", Options{
+		Provider: "claude",
+		Language: "en",
+		ResumeMarker: &ResumeMarker{
+			WorkflowMode: "refactor",
+			PhaseIndex:   2,
+			BranchName:   "refactor/claude-cancel/phase",
+		},
+	}, lineCh, doneCh)
+	waitForFile(t, filepath.Join(projectDir, resumeMarkerFileName))
+	marker, err := ReadResumeMarker(filepath.Join(projectDir, resumeMarkerFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if marker.PromptFilePath != "" {
+		t.Fatalf("claude marker should not include prompt file path: %#v", marker)
+	}
+	cancel()
+	for range lineCh {
+	}
+	if err := <-doneCh; err != nil {
+		t.Fatalf("cancellation should succeed, got: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(projectDir, resumeMarkerFileName)); statErr != nil {
+		t.Fatalf("resume marker should be retained after cancellation, stat err=%v", statErr)
+	}
+}
+
+func TestRunPhaseDeletesResumeMarkerOnCompletion(t *testing.T) {
+	binDir := t.TempDir()
+	projectDir := t.TempDir()
+	logDir := t.TempDir()
+	writeExecutable(t, binDir, "opencode", `#!/bin/sh
+set -eu
+while [ $# -gt 0 ]; do
+	case "$1" in
+		run)
+			shift
+			;;
+		--format)
+			shift 2
+			;;
+		--auto)
+			shift
+			;;
+		-f|--file)
+			shift 2
+			;;
+		--model)
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+printf '%s\n' '{"type":"text","part":{"text":"ok"}}'
+`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := runPhaseWith(t, projectDir, logDir, "complete", 1, Options{
+		Provider: "opencode",
+		Language: "en",
+		ResumeMarker: &ResumeMarker{
+			WorkflowMode: "refactor",
+			PhaseIndex:   1,
+			BranchName:   "refactor/complete/phase",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(filepath.Join(projectDir, resumeMarkerFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("resume marker should be deleted after completion, stat err=%v", statErr)
 	}
 }
 
