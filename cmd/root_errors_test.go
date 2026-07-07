@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Morialkar/yvcdb/internal/runner"
 )
 
 func resetFlags(t *testing.T) {
@@ -35,9 +37,150 @@ func TestDetectMode(t *testing.T) {
 	if got, err := detectMode(empty); err != nil || got != "refactor" {
 		t.Fatalf("non-empty directory: mode=%q err=%v", got, err)
 	}
+	artifacts := t.TempDir()
+	if err := os.Mkdir(filepath.Join(artifacts, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifacts, ".yvcdb_resume.json"), []byte(`{"schemaVersion":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifacts, ".yvcdb_security_iter1_abcd.md"), []byte("prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := detectMode(artifacts); err != nil || got != "greenfield" {
+		t.Fatalf("yvcdb artifacts should not affect mode: mode=%q err=%v", got, err)
+	}
 	if _, err := detectMode(filepath.Join(empty, "missing")); err == nil {
 		t.Fatal("missing directory should fail")
 	}
+}
+
+func TestResolveResumeCandidate(t *testing.T) {
+	t.Run("valid marker with dead pid", func(t *testing.T) {
+		dir := t.TempDir()
+		child := exec.Command("sh", "-c", "exit 0")
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		pid := child.Process.Pid
+		if err := child.Wait(); err != nil {
+			t.Fatal(err)
+		}
+		marker := runner.ResumeMarker{SchemaVersion: 1, PID: pid, PhaseID: "security"}
+		if err := runner.WriteResumeMarker(filepath.Join(dir, ".yvcdb_resume.json"), marker); err != nil {
+			t.Fatal(err)
+		}
+		got, cleanup, err := resolveResumeCandidate(dir, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cleanup {
+			t.Fatal("valid marker should not be cleaned up")
+		}
+		if got == nil || got.PID != pid {
+			t.Fatalf("expected resume candidate, got %#v", got)
+		}
+	})
+
+	t.Run("malformed marker is removed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".yvcdb_resume.json")
+		if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, cleanup, err := resolveResumeCandidate(dir, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil || !cleanup {
+			t.Fatalf("expected stale marker cleanup, got=%#v cleanup=%v", got, cleanup)
+		}
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("stale marker should be removed, stat err=%v", statErr)
+		}
+	})
+
+	t.Run("wrong schema marker is removed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".yvcdb_resume.json")
+		if err := os.WriteFile(path, []byte(`{"schemaVersion":2,"PID":1}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, cleanup, err := resolveResumeCandidate(dir, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil || !cleanup {
+			t.Fatalf("expected stale marker cleanup, got=%#v cleanup=%v", got, cleanup)
+		}
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("stale marker should be removed, stat err=%v", statErr)
+		}
+	})
+
+	t.Run("live pid leaves marker alone", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".yvcdb_resume.json")
+		if err := runner.WriteResumeMarker(path, runner.ResumeMarker{SchemaVersion: 1, PID: os.Getpid(), PhaseID: "security"}); err != nil {
+			t.Fatal(err)
+		}
+		got, cleanup, err := resolveResumeCandidate(dir, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil || cleanup {
+			t.Fatalf("expected live session suppression, got=%#v cleanup=%v", got, cleanup)
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("live marker should remain in place, stat err=%v", statErr)
+		}
+	})
+
+	t.Run("explicit phase suppresses resume", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".yvcdb_resume.json")
+		if err := runner.WriteResumeMarker(path, runner.ResumeMarker{SchemaVersion: 1, PID: os.Getpid() + 100000, PhaseID: "security"}); err != nil {
+			t.Fatal(err)
+		}
+		got, cleanup, err := resolveResumeCandidate(dir, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil || cleanup {
+			t.Fatalf("expected explicit phase to suppress resume, got=%#v cleanup=%v", got, cleanup)
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("marker should remain when explicit flags suppress resume, stat err=%v", statErr)
+		}
+	})
+
+	t.Run("explicit mode suppresses resume", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".yvcdb_resume.json")
+		if err := runner.WriteResumeMarker(path, runner.ResumeMarker{SchemaVersion: 1, PID: os.Getpid() + 100000, PhaseID: "security"}); err != nil {
+			t.Fatal(err)
+		}
+		got, cleanup, err := resolveResumeCandidate(dir, false, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil || cleanup {
+			t.Fatalf("expected explicit mode to suppress resume, got=%#v cleanup=%v", got, cleanup)
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("marker should remain when explicit flags suppress resume, stat err=%v", statErr)
+		}
+	})
+
+	t.Run("no marker", func(t *testing.T) {
+		got, cleanup, err := resolveResumeCandidate(t.TempDir(), false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil || cleanup {
+			t.Fatalf("expected no resume candidate, got=%#v cleanup=%v", got, cleanup)
+		}
+	})
 }
 
 func writeFakeClaude(t *testing.T) {

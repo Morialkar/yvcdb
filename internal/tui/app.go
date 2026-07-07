@@ -91,16 +91,17 @@ type ChecklistItem struct {
 
 // Model is the Bubble Tea application model.
 type Model struct {
-	ProjectDir string
-	StartPhase int
-	NoGit      bool
-	Provider   string
-	AgentModel string
-	MaxTurns   int
-	Language   string
-	Prompts    map[string]string
-	Workflow   phases.Workflow
-	l10n       i18n.Localizer
+	ProjectDir      string
+	StartPhase      int
+	NoGit           bool
+	Provider        string
+	AgentModel      string
+	ResumeCandidate *runner.ResumeMarker
+	MaxTurns        int
+	Language        string
+	Prompts         map[string]string
+	Workflow        phases.Workflow
+	l10n            i18n.Localizer
 
 	state     appState
 	stageIdx  int
@@ -125,7 +126,7 @@ type Model struct {
 }
 
 // NewModel constructs the YVCDB application model.
-func NewModel(projectDir string, startPhase int, noGit bool, provider, model string, maxTurns int, language string, prompts map[string]string, workflows ...phases.Workflow) Model {
+func NewModel(projectDir string, startPhase int, noGit bool, provider, model string, maxTurns int, language string, prompts map[string]string, resumeCandidate *runner.ResumeMarker, workflows ...phases.Workflow) Model {
 	ts := time.Now().Format(sessionTimestampFormat)
 	vp := viewport.New(defaultViewportWidth, defaultViewportHeight)
 	l10n := i18n.New(language)
@@ -216,26 +217,27 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 	}
 
 	return Model{
-		ProjectDir: projectDir,
-		StartPhase: startPhase,
-		NoGit:      noGit,
-		Provider:   provider,
-		AgentModel: model,
-		MaxTurns:   maxTurns,
-		Language:   l10n.Language,
-		Prompts:    prompts,
-		Workflow:   workflow,
-		l10n:       l10n,
-		timestamp:  ts,
-		logDir:     filepath.Join(projectDir, logDirectoryName),
-		stageIdx:   stageIdx,
-		viewport:   vp,
-		input:      input,
-		checkItems: items,
-		termW:      defaultViewportWidth,
-		termH:      defaultTerminalHeight,
-		state:      state,
-		useGit:     useGit,
+		ProjectDir:      projectDir,
+		StartPhase:      startPhase,
+		NoGit:           noGit,
+		Provider:        provider,
+		AgentModel:      model,
+		ResumeCandidate: resumeCandidate,
+		MaxTurns:        maxTurns,
+		Language:        l10n.Language,
+		Prompts:         prompts,
+		Workflow:        workflow,
+		l10n:            l10n,
+		timestamp:       ts,
+		logDir:          filepath.Join(projectDir, logDirectoryName),
+		stageIdx:        stageIdx,
+		viewport:        vp,
+		input:           input,
+		checkItems:      items,
+		termW:           defaultViewportWidth,
+		termH:           defaultTerminalHeight,
+		state:           state,
+		useGit:          useGit,
 	}
 }
 

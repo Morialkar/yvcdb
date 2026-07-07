@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -121,6 +123,13 @@ func run(cmd *cobra.Command, args []string) error {
 		startPhase = idx
 	}
 
+	phaseExplicit := cmd != nil && cmd.Flags().Changed("phase")
+	modeExplicit := cmd != nil && cmd.Flags().Changed("mode")
+	resumeCandidate, _, err := resolveResumeCandidate(absDir, phaseExplicit, modeExplicit)
+	if err != nil {
+		return fmt.Errorf(l10n.Pick("resolve resume candidate: %w", "résolution de la reprise : %w"), err)
+	}
+
 	// Load embedded prompts
 	prompts, err := loadPrompts(cfg.Language, workflow)
 	if err != nil {
@@ -128,12 +137,42 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Launch TUI
-	m := tui.NewModel(absDir, startPhase, flagNoGit, cfg.Provider, cfg.Model, flagMaxTurns, cfg.Language, prompts, workflow)
+	m := tui.NewModel(absDir, startPhase, flagNoGit, cfg.Provider, cfg.Model, flagMaxTurns, cfg.Language, prompts, resumeCandidate, workflow)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI: %w", err)
 	}
 	return nil
+}
+
+func resolveResumeCandidate(projectDir string, phaseExplicit, modeExplicit bool) (*runner.ResumeMarker, bool, error) {
+	if phaseExplicit || modeExplicit {
+		return nil, false, nil
+	}
+	markerPath := filepath.Join(projectDir, ".yvcdb_resume.json")
+	marker, err := runner.ReadResumeMarker(markerPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		_ = os.Remove(markerPath)
+		return nil, true, nil
+	}
+	if processAlive(marker.PID) {
+		return nil, false, nil
+	}
+	return &marker, false, nil
+}
+
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
 }
 
 func detectMode(projectDir string) (string, error) {
@@ -142,8 +181,10 @@ func detectMode(projectDir string) (string, error) {
 		return "", err
 	}
 	for _, entry := range entries {
-		switch entry.Name() {
-		case ".git", ".gitkeep", ".DS_Store", "refactor-logs":
+		switch {
+		case entry.Name() == ".git", entry.Name() == ".gitkeep", entry.Name() == ".DS_Store", entry.Name() == "refactor-logs":
+			continue
+		case strings.HasPrefix(entry.Name(), ".yvcdb_"):
 			continue
 		default:
 			return phases.ModeRefactor, nil

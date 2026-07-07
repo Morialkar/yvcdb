@@ -46,7 +46,7 @@ func TestNewModelDefaultsModelFromProvider(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := NewModel(t.TempDir(), 2, true, tt.provider, "  ", 2, "en", testPrompts())
+			m := NewModel(t.TempDir(), 2, true, tt.provider, "  ", 2, "en", testPrompts(), nil)
 			if m.AgentModel != tt.want {
 				t.Fatalf("expected suggested %s model, got %q", tt.provider, m.AgentModel)
 			}
@@ -58,7 +58,7 @@ func TestNewModelDefaultsModelFromProvider(t *testing.T) {
 }
 
 func TestNewModelKeepsOpenCodeModelBlankAndUsesOpenCodeMessage(t *testing.T) {
-	m := NewModel(t.TempDir(), 2, true, "opencode", "  ", 2, "en", testPrompts())
+	m := NewModel(t.TempDir(), 2, true, "opencode", "  ", 2, "en", testPrompts(), nil)
 	if m.AgentModel != "" {
 		t.Fatalf("expected blank OpenCode model, got %q", m.AgentModel)
 	}
@@ -70,7 +70,7 @@ func TestNewModelKeepsOpenCodeModelBlankAndUsesOpenCodeMessage(t *testing.T) {
 		t.Fatalf("expected cost warning, got %q", view)
 	}
 
-	fr := NewModel(t.TempDir(), 2, true, "opencode", "  ", 2, "fr", testPrompts())
+	fr := NewModel(t.TempDir(), 2, true, "opencode", "  ", 2, "fr", testPrompts(), nil)
 	frView := fr.View()
 	if !strings.Contains(frView, "Modèle par défaut d'OpenCode") || !strings.Contains(frView, "configuré dans vos paramètres") {
 		t.Fatalf("expected French OpenCode default message, got %q", frView)
@@ -79,7 +79,7 @@ func TestNewModelKeepsOpenCodeModelBlankAndUsesOpenCodeMessage(t *testing.T) {
 
 func TestOpenCodeModelSelectAllowsBlankAndShowsExplicitModel(t *testing.T) {
 	installFakeOpenCode(t)
-	blank := NewModel(t.TempDir(), 0, true, "opencode", "  ", 2, "en", testPrompts())
+	blank := NewModel(t.TempDir(), 0, true, "opencode", "  ", 2, "en", testPrompts(), nil)
 	if blank.AgentModel != "" {
 		t.Fatalf("expected blank OpenCode model, got %q", blank.AgentModel)
 	}
@@ -91,7 +91,7 @@ func TestOpenCodeModelSelectAllowsBlankAndShowsExplicitModel(t *testing.T) {
 	blank = drainActiveRuns(t, blank)
 	cancelRuns(blank)
 
-	explicit := NewModel(t.TempDir(), 0, true, "opencode", "custom/model", 2, "en", testPrompts())
+	explicit := NewModel(t.TempDir(), 0, true, "opencode", "custom/model", 2, "en", testPrompts(), nil)
 	if explicit.AgentModel != "custom/model" {
 		t.Fatalf("expected explicit OpenCode model, got %q", explicit.AgentModel)
 	}
@@ -166,7 +166,7 @@ func TestModelSelectKeys(t *testing.T) {
 	}
 
 	// enter without git repo and NoGit=false goes to git setup
-	m = NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m = NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.input.SetValue("sonnet")
 	updated, _ = m.handleKey(key(tea.KeyEnter, 0))
 	m = updated.(Model)
@@ -320,7 +320,7 @@ func TestStartStageGitBranching(t *testing.T) {
 	installFakeClaude(t)
 	dir := newGitRepo(t)
 
-	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.useGit = true
 	m.state = stateStage
 	m.stageIdx = 0
@@ -332,7 +332,7 @@ func TestStartStageGitBranching(t *testing.T) {
 	cancelRuns(m)
 
 	// second start with the same timestamp: branch already exists
-	m2 := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m2 := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m2.useGit = true
 	m2.state = stateStage
 	m2.stageIdx = 0
@@ -373,7 +373,7 @@ func TestStartStageGitFailures(t *testing.T) {
 
 func TestStartStageSkipsPhasesBeforeStartPhase(t *testing.T) {
 	installFakeClaude(t)
-	m := NewModel(t.TempDir(), 5, true, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(t.TempDir(), 5, true, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.state = stateStage
 	m.stageIdx = 0 // stages 0..2 contain phases < 5 only: all skipped
 	m, _ = m.startStage()
@@ -442,7 +442,7 @@ func TestCheckStageDoneGitFailures(t *testing.T) {
 
 	// worktree removal fails for a skipped run pointing at a bogus dir
 	dir := newGitRepo(t)
-	m = NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m = NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.useGit = true
 	m.stageIdx = 2
 	m.runs = []*phaseRun{
@@ -457,7 +457,7 @@ func TestCheckStageDoneGitFailures(t *testing.T) {
 
 func TestCheckStageDoneRebaseConflict(t *testing.T) {
 	dir := newGitRepo(t)
-	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.Workflow.Stages = [][]int{{0}, {1}, {2, 3, 4}, {5}}
 	m.useGit = true
 	m.stageIdx = 2
@@ -495,7 +495,7 @@ func TestDoGitInitSupportsEmptyGreenfieldProject(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_NAME", "YVCDB Test")
 	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
 	// Empty greenfield projects need an initial commit before phase branches.
-	m := NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	msg := m.doGitInit()()
 	done, ok := msg.(gitSetupDoneMsg)
 	if !ok || done.err != nil || !done.useGit {

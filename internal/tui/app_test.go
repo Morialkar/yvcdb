@@ -90,7 +90,7 @@ func TestGreenfieldWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
 	for _, phase := range workflow.Phases {
 		prompts[phase.ID] = "prompt for " + phase.ID
 	}
-	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, workflow)
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, nil, workflow)
 	if len(m.Workflow.Phases) != 7 || len(m.checkItems) != 9 {
 		t.Fatalf("unexpected greenfield model: phases=%d checklist=%d", len(m.Workflow.Phases), len(m.checkItems))
 	}
@@ -119,7 +119,7 @@ func TestFeatureWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
 	for _, phase := range workflow.Phases {
 		prompts[phase.ID] = "prompt for " + phase.ID
 	}
-	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "fr", prompts, workflow)
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "fr", prompts, nil, workflow)
 	if len(m.Workflow.Phases) != 6 || len(m.checkItems) != 9 {
 		t.Fatalf("unexpected feature model: phases=%d checklist=%d", len(m.Workflow.Phases), len(m.checkItems))
 	}
@@ -148,7 +148,7 @@ func TestDebugWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
 	for _, phase := range workflow.Phases {
 		prompts[phase.ID] = "prompt for " + phase.ID
 	}
-	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, workflow)
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, nil, workflow)
 	if len(m.Workflow.Phases) != 6 || len(m.checkItems) != 9 {
 		t.Fatalf("unexpected debug model: phases=%d checklist=%d", len(m.Workflow.Phases), len(m.checkItems))
 	}
@@ -290,7 +290,7 @@ func TestGitSetupCommandAndCommitChanges(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_NAME", "YVCDB Test")
 	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
 
-	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	msg := m.doGitInit()()
 	done, ok := msg.(gitSetupDoneMsg)
 	if !ok || done.err != nil || !done.useGit {
@@ -323,7 +323,7 @@ func TestParallelStageIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.Workflow.Stages = [][]int{{0}, {1}, {2, 3, 4}, {5}}
 	m.state = stateStage
 	m.stageIdx = 2
@@ -445,7 +445,7 @@ func TestAdditionalKeyPathsAndCancellation(t *testing.T) {
 
 func newTestModel(t *testing.T) Model {
 	t.Helper()
-	return NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "en", testPrompts())
+	return NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "en", testPrompts(), nil)
 }
 
 func testPrompts() map[string]string {
