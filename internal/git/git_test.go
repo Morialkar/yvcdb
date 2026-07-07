@@ -56,6 +56,16 @@ func TestRepositoryQueries(t *testing.T) {
 	if !exists {
 		t.Fatal("created branch was not found")
 	}
+	if err := Checkout(dir, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := CurrentBranch(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branch != "feature" {
+		t.Fatalf("expected to switch to feature, got %q", branch)
+	}
 }
 
 func TestInitCreatesSnapshot(t *testing.T) {

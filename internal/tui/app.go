@@ -37,6 +37,7 @@ type appState int
 
 const (
 	stateModelSelect appState = iota
+	stateResumePrompt
 	stateGitSetup
 	stateStage    // one or more runs in progress / awaiting decision
 	stateFeedback // free-form refinement for the selected run
@@ -192,6 +193,9 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 
 	useGit := !noGit && git.IsRepo(projectDir)
 	state := stateModelSelect
+	if resumeCandidate != nil {
+		state = stateResumePrompt
+	}
 	if strings.TrimSpace(model) == "" {
 		model = appconfig.SuggestedModel(provider)
 	}
@@ -344,6 +348,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 
+	case stateResumePrompt:
+		switch key {
+		case "r", "R", "enter":
+			return m.resumeInterruptedPhase()
+		case "d", "D", "esc":
+			return m.discardResumeCandidate("")
+		}
+		return m, nil
+
 	case stateFeedback:
 		switch key {
 		case "enter":
@@ -479,6 +492,8 @@ func (m Model) View() string {
 	switch m.state {
 	case stateModelSelect:
 		b.WriteString(m.renderModelSelect())
+	case stateResumePrompt:
+		b.WriteString(m.renderResumePrompt())
 	case stateGitSetup:
 		b.WriteString(m.renderGitSetup())
 	case stateStage, stateFixRun:
@@ -611,6 +626,46 @@ func (m Model) renderModelSelect() string {
 	}
 	warn := styleWarn.Render(m.l10n.T("model.warning"))
 	return styleDecisionBox.Width(64).Render(title + "\n" + help + "\n\n" + m.input.View() + extra + "\n\n" + warn + "\n" + styleDim.Render(m.l10n.T("confirm.quit")))
+}
+
+func (m Model) renderResumePrompt() string {
+	if m.ResumeCandidate == nil {
+		return ""
+	}
+	candidate := m.ResumeCandidate
+	workflow := m.resumeWorkflow()
+	phaseName := candidate.PhaseID
+	if candidate.PhaseIndex >= 0 && candidate.PhaseIndex < len(workflow.Phases) {
+		phase := workflow.Phases[candidate.PhaseIndex]
+		phaseName = fmt.Sprintf("%s — %s", phase.Label, m.phaseTitle(phase.ID))
+	}
+	lines := []string{
+		styleBold.Render(m.l10n.T("resume.title")),
+		styleDim.Render(m.l10n.T("resume.body")),
+		"",
+		styleDim.Render(m.l10n.T("resume.mode", candidate.WorkflowMode)),
+		styleDim.Render(m.l10n.T("resume.phase", phaseName)),
+		styleDim.Render(m.l10n.T("resume.iteration", candidate.Iteration)),
+		styleDim.Render(m.l10n.T("resume.branch", candidate.BranchName)),
+		"",
+		styleSuccess.Render("[r]") + " " + m.l10n.T("resume.resume") + "   " + styleWarn.Render("[d/esc]") + " " + m.l10n.T("resume.discard"),
+	}
+	width := m.termW - 8
+	if width < 40 {
+		width = 40
+	}
+	return styleDecisionBox.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) resumeWorkflow() phases.Workflow {
+	if m.ResumeCandidate != nil {
+		if mode := strings.TrimSpace(m.ResumeCandidate.WorkflowMode); mode != "" && mode != m.Workflow.Mode {
+			if workflow, err := phases.ForMode(mode); err == nil {
+				return workflow
+			}
+		}
+	}
+	return m.Workflow
 }
 
 func (m Model) renderFeedback() string {
@@ -763,6 +818,76 @@ func (m Model) renderDone() string {
 	return b.String()
 }
 
+func (m Model) resumeInterruptedPhase() (Model, tea.Cmd) {
+	candidate := m.ResumeCandidate
+	if candidate == nil {
+		m.state = stateModelSelect
+		return m, nil
+	}
+	m.Workflow = m.resumeWorkflow()
+	if candidate.PhaseIndex < 0 || candidate.PhaseIndex >= len(m.Workflow.Phases) {
+		return m.discardResumeCandidate(m.l10n.T("resume.branch_missing", candidate.BranchName))
+	}
+	stageIdx := m.stageIndexForPhase(candidate.PhaseIndex)
+	if stageIdx < 0 {
+		return m.discardResumeCandidate(m.l10n.T("resume.branch_missing", candidate.BranchName))
+	}
+	stage := m.Workflow.Stages[stageIdx]
+	if len(stage) > 1 {
+		return m.discardResumeCandidate(m.l10n.T("resume.parallel_unsupported"))
+	}
+	branchExists, err := git.BranchExists(m.ProjectDir, candidate.BranchName)
+	if err != nil {
+		return m.discardResumeCandidate(err.Error())
+	}
+	if !branchExists {
+		return m.discardResumeCandidate(m.l10n.T("resume.branch_missing", candidate.BranchName))
+	}
+	if err := git.Checkout(m.ProjectDir, candidate.BranchName); err != nil {
+		return m.discardResumeCandidate(err.Error())
+	}
+	m.Provider = candidate.Provider
+	m.AgentModel = candidate.Model
+	m.StartPhase = candidate.PhaseIndex
+	if candidate.SessionTimestamp != "" {
+		m.timestamp = candidate.SessionTimestamp
+	}
+	m.stageIdx = stageIdx
+	m.state = stateStage
+	m.statusMsg = ""
+	resumed, cmd := m.startStage()
+	resumed.ResumeCandidate = nil
+	return resumed, cmd
+}
+
+func (m Model) discardResumeCandidate(message string) (Model, tea.Cmd) {
+	if m.ResumeCandidate != nil {
+		if m.ResumeCandidate.PromptFilePath != "" {
+			_ = os.Remove(m.ResumeCandidate.PromptFilePath)
+		}
+		_ = os.Remove(filepath.Join(m.ProjectDir, ".yvcdb_resume.json"))
+		m.ResumeCandidate = nil
+	}
+	m.state = stateModelSelect
+	if message != "" {
+		m.statusMsg = styleWarn.Render("⚠ " + message)
+	} else {
+		m.statusMsg = ""
+	}
+	return m, nil
+}
+
+func (m Model) stageIndexForPhase(phaseIdx int) int {
+	for si, stage := range m.Workflow.Stages {
+		for _, pi := range stage {
+			if pi == phaseIdx {
+				return si
+			}
+		}
+	}
+	return -1
+}
+
 // ─── Stage orchestration ─────────────────────────────────────────────────────
 
 func (m Model) startStage() (Model, tea.Cmd) {
@@ -783,9 +908,13 @@ func (m Model) startStage() (Model, tea.Cmd) {
 			continue
 		}
 		p := m.Workflow.Phases[phaseIdx]
+		iteration := 1
+		if m.ResumeCandidate != nil && m.ResumeCandidate.PhaseIndex == phaseIdx {
+			iteration = m.ResumeCandidate.Iteration
+		}
 		r := &phaseRun{
 			phaseIdx:  phaseIdx,
-			iteration: 1,
+			iteration: iteration,
 			workDir:   m.ProjectDir,
 			branch:    fmt.Sprintf("%s/%s/%s", m.Workflow.Mode, m.timestamp, p.ID),
 		}

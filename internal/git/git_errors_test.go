@@ -33,6 +33,12 @@ func TestCreateBranchFailsOutsideRepo(t *testing.T) {
 	}
 }
 
+func TestCheckoutFailsOutsideRepo(t *testing.T) {
+	if err := Checkout(t.TempDir(), "feature"); err == nil {
+		t.Fatal("expected error outside a repository")
+	}
+}
+
 func TestBranchExistsFailsOutsideRepo(t *testing.T) {
 	// git show-ref exits 128 outside a repo, which is not the "absent" exit code 1
 	if _, err := BranchExists(t.TempDir(), "feature"); err == nil {
@@ -157,6 +163,13 @@ func TestCommitAllFailsWithNothingToCommit(t *testing.T) {
 	dir := initRepo(t)
 	if err := CommitAll(dir, "empty"); err == nil {
 		t.Fatal("expected error when there is nothing to commit")
+	}
+}
+
+func TestCheckoutFailsForMissingBranch(t *testing.T) {
+	dir := initRepo(t)
+	if err := Checkout(dir, "missing"); err == nil {
+		t.Fatal("expected checkout error for missing branch")
 	}
 }
 

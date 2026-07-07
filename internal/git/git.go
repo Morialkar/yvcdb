@@ -73,6 +73,15 @@ func CurrentBranch(dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Checkout checks out an existing branch in dir.
+func Checkout(dir, branch string) error {
+	out, err := exec.Command("git", "-C", dir, "checkout", branch).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checkout %s: %w\n%s", branch, err, out)
+	}
+	return nil
+}
+
 // WorktreeAdd creates a new branch from HEAD and checks it out in a separate worktree.
 func WorktreeAdd(repoDir, worktreeDir, branch string) error {
 	out, err := exec.Command("git", "-C", repoDir, "worktree", "add", "-b", branch, worktreeDir).CombinedOutput()
