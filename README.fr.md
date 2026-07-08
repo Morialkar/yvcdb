@@ -220,6 +220,8 @@ Quand l'intégration Git est active, YVCDB :
 
 Si une création de branche, un commit, un rebase ou un merge échoue, YVCDB arrête ce chemin et signale l'erreur au lieu d'avancer silencieusement. Les rebases en conflit sont annulés et leurs worktrees préservés pour une résolution manuelle. Lancez l'outil avec un arbre de travail propre pour des résultats prévisibles.
 
+Si une phase est interrompue, par exemple avec Ctrl+C pendant une exécution, YVCDB conserve un petit marqueur de reprise exclu par Git. Au lancement suivant dans ce projet, il propose de reprendre la même phase sur la même branche et de continuer à partir de l'arbre de travail et du fichier d'état de phase, ou de supprimer l'état enregistré et nettoyer. Un `--phase` ou `--mode` explicite masque cette proposition. La reprise des phases parallèles n'est pas encore prise en charge.
+
 ## Logs
 
 Les événements bruts du fournisseur sont écrits dans :

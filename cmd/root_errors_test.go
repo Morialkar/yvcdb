@@ -183,6 +183,12 @@ func TestResolveResumeCandidate(t *testing.T) {
 	})
 }
 
+func TestProcessAliveRejectsNonPositivePID(t *testing.T) {
+	if processAlive(0) || processAlive(-1) {
+		t.Fatal("non-positive PIDs should not be reported alive")
+	}
+}
+
 func writeFakeClaude(t *testing.T) {
 	t.Helper()
 	writeFakeExecutable(t, "claude")
@@ -267,6 +273,65 @@ func TestRunProviderOverrideSuggestsModel(t *testing.T) {
 	withStdin(t, "", func() {
 		if err := run(nil, nil); err == nil {
 			t.Fatal("expected TUI startup failure without a TTY")
+		}
+	})
+}
+
+func TestRunRejectsInvalidLanguageFlag(t *testing.T) {
+	resetFlags(t)
+	t.Setenv("YVCDB_CONFIG_HOME", t.TempDir())
+	writeFakeClaude(t)
+	flagLang = "de"
+	withStdin(t, "", func() {
+		if err := run(nil, []string{t.TempDir()}); err == nil {
+			t.Fatal("expected invalid language error")
+		}
+	})
+}
+
+func TestRunRejectsInvalidModeFlag(t *testing.T) {
+	resetFlags(t)
+	t.Setenv("YVCDB_CONFIG_HOME", t.TempDir())
+	writeFakeClaude(t)
+	flagMode = "invalid"
+	withStdin(t, "", func() {
+		if err := run(nil, []string{t.TempDir()}); err == nil {
+			t.Fatal("expected invalid mode error")
+		}
+	})
+}
+
+func TestRunRejectsInvalidProviderFlag(t *testing.T) {
+	resetFlags(t)
+	t.Setenv("YVCDB_CONFIG_HOME", t.TempDir())
+	writeFakeClaude(t)
+	flagProvider = "other"
+	withStdin(t, "", func() {
+		if err := run(nil, []string{t.TempDir()}); err == nil {
+			t.Fatal("expected invalid provider error")
+		}
+	})
+}
+
+func TestRunRejectsUnknownPhaseFlag(t *testing.T) {
+	resetFlags(t)
+	t.Setenv("YVCDB_CONFIG_HOME", t.TempDir())
+	writeFakeClaude(t)
+	flagPhase = "missing"
+	withStdin(t, "", func() {
+		if err := run(nil, []string{t.TempDir()}); err == nil {
+			t.Fatal("expected unknown phase error")
+		}
+	})
+}
+
+func TestRunRejectsMissingProjectDirectory(t *testing.T) {
+	resetFlags(t)
+	t.Setenv("YVCDB_CONFIG_HOME", t.TempDir())
+	writeFakeClaude(t)
+	withStdin(t, "", func() {
+		if err := run(nil, []string{filepath.Join(t.TempDir(), "missing")}); err == nil {
+			t.Fatal("expected missing directory error")
 		}
 	})
 }

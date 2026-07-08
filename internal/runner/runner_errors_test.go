@@ -177,6 +177,22 @@ func TestReadResumeMarkerIgnoresUnknownFields(t *testing.T) {
 	}
 }
 
+func TestWriteResumeMarkerFailsWhenPathIsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, resumeMarkerFileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteResumeMarker(filepath.Join(dir, resumeMarkerFileName), ResumeMarker{}); err == nil {
+		t.Fatal("expected write error")
+	}
+}
+
+func TestReadResumeMarkerMissingFile(t *testing.T) {
+	if _, err := ReadResumeMarker(filepath.Join(t.TempDir(), resumeMarkerFileName)); !os.IsNotExist(err) {
+		t.Fatalf("expected not-exist error, got: %v", err)
+	}
+}
+
 func runPhaseWith(t *testing.T, projectDir, logDir, timestamp string, iteration int, opts Options) ([]string, error) {
 	t.Helper()
 	lineCh := make(chan string, 64)
@@ -209,6 +225,38 @@ func TestRunPhaseFailsWhenLogFileIsADirectory(t *testing.T) {
 	_, err := runPhaseWith(t, t.TempDir(), logDir, "ts", 1, Options{})
 	if err == nil || !strings.Contains(err.Error(), "create log") {
 		t.Fatalf("expected create log failure, got: %v", err)
+	}
+}
+
+func TestRunPhaseFailsWhenPromptFileCannotBeCreated(t *testing.T) {
+	projectDir := filepath.Join(t.TempDir(), "project-file")
+	if err := os.WriteFile(projectDir, []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "opencode", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+	_, err := runPhaseWith(t, projectDir, t.TempDir(), "ts", 1, Options{Provider: "opencode", Language: "en"})
+	if err == nil || !strings.Contains(err.Error(), "create prompt file") {
+		t.Fatalf("expected prompt file creation failure, got: %v", err)
+	}
+}
+
+func TestRunPhaseFailsWhenResumeMarkerCannotBeWritten(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectDir, ".yvcdb_resume.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "claude", "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+	_, err := runPhaseWithOptions(t, projectDir, t.TempDir(), "ts", 1, Options{
+		Provider:     "claude",
+		Language:     "en",
+		ResumeMarker: &ResumeMarker{WorkflowMode: "refactor", PhaseIndex: 1, BranchName: "refactor/ts/phase"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "write resume marker") {
+		t.Fatalf("expected resume marker write failure, got: %v", err)
 	}
 }
 

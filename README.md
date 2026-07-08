@@ -220,6 +220,8 @@ When Git integration is enabled, YVCDB:
 
 If branch creation, commit, rebase, or merge fails, YVCDB stops that path and reports the error instead of silently advancing. Conflicted rebases are aborted and their worktrees are preserved for manual resolution. Run with a clean working tree for predictable results.
 
+If a phase is interrupted, for example with Ctrl+C during a run, YVCDB keeps a small git-excluded resume marker. On the next launch in that project, it offers to resume the same phase on the same branch and continue from the working tree plus the phase state file, or discard the saved state and clean up. An explicit `--phase` or `--mode` suppresses the offer. Resume for parallel stages is not supported yet.
+
 ## Logs
 
 Raw provider stream events are written to:

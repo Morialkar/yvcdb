@@ -77,6 +77,18 @@ func TestSuggestedModel(t *testing.T) {
 	}
 }
 
+func TestSupportedProvidersReturnsCopy(t *testing.T) {
+	got := SupportedProviders()
+	if len(got) != 3 || got[0] != "claude" || got[1] != "codex" || got[2] != "opencode" {
+		t.Fatalf("unexpected providers: %#v", got)
+	}
+	got[0] = "mutated"
+	again := SupportedProviders()
+	if again[0] != "claude" {
+		t.Fatalf("expected copy to remain unchanged, got %#v", again)
+	}
+}
+
 func TestLoadNormalizesInvalidLanguage(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("YVCDB_CONFIG_HOME", dir)

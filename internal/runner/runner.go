@@ -317,6 +317,7 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		var watchdog *inactivityWatchdog
 		promptFilePath := ""
 		resumeMarkerPath := ""
+		// Prompt files and resume markers are kept only on genuine user cancellation.
 		cleanupResumeArtifacts := func() error {
 			var runErr error
 			if promptFilePath != "" {

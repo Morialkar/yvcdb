@@ -273,3 +273,17 @@ func TestEnsureInfoExcludeEntryCreatesMissingInfoDir(t *testing.T) {
 		t.Fatalf("exclude entry missing: %q", data)
 	}
 }
+
+func TestEnsureInfoExcludeEntryFailsWhenExcludeIsDirectory(t *testing.T) {
+	dir := initRepo(t)
+	infoDir := filepath.Join(dir, ".git", "info")
+	if err := os.RemoveAll(infoDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(infoDir, "exclude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*"); err == nil {
+		t.Fatal("expected read error when exclude path is a directory")
+	}
+}
