@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	gitpkg "github.com/Morialkar/yvcdb/internal/git"
 )
 
 func TestCodexEventToLinesEmptyPayloads(t *testing.T) {
@@ -395,6 +394,10 @@ func TestRunPhaseOpenCodeNonZeroExitSurfacesStderr(t *testing.T) {
 	binDir := t.TempDir()
 	projectDir := t.TempDir()
 	logDir := t.TempDir()
+	t.Setenv("GIT_AUTHOR_NAME", "YVCDB Test")
+	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
+	t.Setenv("GIT_COMMITTER_NAME", "YVCDB Test")
+	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
 	writeExecutable(t, binDir, "opencode", `#!/bin/sh
 set -eu
 while [ $# -gt 0 ]; do
@@ -736,9 +739,9 @@ func TestRunPhaseEnsuresPromptExcludeWithoutResumeMarker(t *testing.T) {
 	binDir := t.TempDir()
 	projectDir := t.TempDir()
 	logDir := t.TempDir()
-	if err := gitpkg.Init(projectDir); err != nil {
-		t.Fatal(err)
-	}
+	runGit(t, projectDir, "init", "-b", "main")
+	runGitConfig(t, projectDir, "user.name", "YVCDB Test")
+	runGitConfig(t, projectDir, "user.email", "test@example.invalid")
 	if err := os.WriteFile(filepath.Join(projectDir, "README.md"), []byte("repo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -780,6 +783,22 @@ printf '%s\n' '{"type":"text","part":{"text":"ok"}}'
 	}
 	if !strings.Contains(string(data), promptFileExcludePattern) {
 		t.Fatalf("exclude entry missing: %q", data)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmdArgs := append([]string{"-C", dir}, args...)
+	if output, err := exec.Command("git", cmdArgs...).CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+}
+
+func runGitConfig(t *testing.T, dir, key, value string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir, "config", key, value)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git config %s: %v\n%s", key, err, output)
 	}
 }
 
