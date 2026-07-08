@@ -25,6 +25,7 @@ var messages = map[string][2]string{
 	"confirm.quit":                {"[enter] Confirm   [esc] Quit", "[entrée] Confirmer   [esc] Quitter"},
 	"resume.title":                {"Resume interrupted phase?", "Reprendre la phase interrompue ?"},
 	"resume.body":                 {"A previous run was interrupted. You can resume it now or discard the saved state and continue normally.", "Une exécution précédente a été interrompue. Vous pouvez la reprendre maintenant ou supprimer l'état enregistré et continuer normalement."},
+	"resume.preamble":             {"\n\n# Resume instructions\nThis phase was interrupted before it finished. The working tree already contains partial, uncommitted progress, and %s reflects what was done so far. Inspect the current working tree and that state file, then continue from there instead of restarting from scratch or duplicating changes that are already present.", "\n\n# Consignes de reprise\nCette phase a été interrompue avant d'être terminée. L'arbre de travail contient déjà une progression partielle non validée, et %s reflète ce qui a déjà été fait. Examine l'arbre de travail actuel et ce fichier d'état, puis continue à partir de là au lieu de repartir de zéro ou de dupliquer les changements déjà présents."},
 	"resume.mode":                 {"Workflow mode: %s", "Mode du workflow : %s"},
 	"resume.phase":                {"Phase: %s", "Phase : %s"},
 	"resume.iteration":            {"Iteration: %d", "Itération : %d"},

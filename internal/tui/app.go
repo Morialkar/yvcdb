@@ -72,6 +72,7 @@ type gitSetupDoneMsg struct {
 type phaseRun struct {
 	phaseIdx  int
 	iteration int
+	resumed   bool
 	lines     []string
 	status    runStatus
 	workDir   string // worktree dir (parallel) or project dir
@@ -668,6 +669,21 @@ func (m Model) resumeWorkflow() phases.Workflow {
 	return m.Workflow
 }
 
+func (m Model) resumeStateArtifactName() string {
+	switch m.resumeWorkflow().Mode {
+	case phases.ModeRefactor:
+		return "REFACTOR_STATE.md"
+	case phases.ModeGreenfield:
+		return "AFTER_SPEC.md"
+	case phases.ModeFeature:
+		return "AFTER_PLAN.md"
+	case phases.ModeDebug:
+		return "AFTER_BUG.md"
+	default:
+		return "the phase state file"
+	}
+}
+
 func (m Model) renderFeedback() string {
 	q := styleBold.Render(m.l10n.T("feedback.title"))
 	help := styleDim.Render(m.l10n.T("feedback.help"))
@@ -846,6 +862,9 @@ func (m Model) resumeInterruptedPhase() (Model, tea.Cmd) {
 	if err := git.Checkout(m.ProjectDir, candidate.BranchName); err != nil {
 		return m.discardResumeCandidate(err.Error())
 	}
+	if candidate.PromptFilePath != "" {
+		_ = os.Remove(candidate.PromptFilePath)
+	}
 	m.Provider = candidate.Provider
 	m.AgentModel = candidate.Model
 	m.StartPhase = candidate.PhaseIndex
@@ -909,12 +928,15 @@ func (m Model) startStage() (Model, tea.Cmd) {
 		}
 		p := m.Workflow.Phases[phaseIdx]
 		iteration := 1
+		resumed := false
 		if m.ResumeCandidate != nil && m.ResumeCandidate.PhaseIndex == phaseIdx {
 			iteration = m.ResumeCandidate.Iteration
+			resumed = true
 		}
 		r := &phaseRun{
 			phaseIdx:  phaseIdx,
 			iteration: iteration,
+			resumed:   resumed,
 			workDir:   m.ProjectDir,
 			branch:    fmt.Sprintf("%s/%s/%s", m.Workflow.Mode, m.timestamp, p.ID),
 		}
@@ -961,6 +983,17 @@ func (m Model) startStage() (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m Model) resumeMarkerForRun(r *phaseRun) *runner.ResumeMarker {
+	if r == nil || r.workDir != m.ProjectDir || m.state == stateFixRun {
+		return nil
+	}
+	return &runner.ResumeMarker{
+		WorkflowMode: m.Workflow.Mode,
+		PhaseIndex:   r.phaseIdx,
+		BranchName:   r.branch,
+	}
+}
+
 func (m *Model) launchRun(slot int) tea.Cmd {
 	r := m.runs[slot]
 	p := m.Workflow.Phases[r.phaseIdx]
@@ -977,15 +1010,24 @@ func (m *Model) launchRun(slot int) tea.Cmd {
 	r.lines = nil
 	r.status = runActive
 
-	r.cancel = runner.RunPhase(r.workDir, m.logDir, m.timestamp, p.ID, r.iteration, systemPrompt, runner.Options{
-		Provider: m.Provider, Model: m.AgentModel, MaxTurns: m.MaxTurns, Feedback: r.feedback, Language: m.Language,
-	}, r.lineCh, r.doneCh)
+	opts := runner.Options{
+		Provider:     m.Provider,
+		Model:        m.AgentModel,
+		MaxTurns:     m.MaxTurns,
+		Feedback:     r.feedback,
+		Language:     m.Language,
+		ResumeMarker: m.resumeMarkerForRun(r),
+	}
+	r.cancel = runner.RunPhase(r.workDir, m.logDir, m.timestamp, p.ID, r.iteration, systemPrompt, opts, r.lineCh, r.doneCh)
 	r.feedback = ""
 	return waitForRun(slot, r.lineCh, r.doneCh)
 }
 
 func (m Model) phaseSystemPrompt(r *phaseRun, phase phases.Phase) (string, error) {
 	systemPrompt := m.Prompts[phase.ID]
+	if r.resumed {
+		systemPrompt += m.l10n.T("resume.preamble", m.resumeStateArtifactName())
+	}
 	systemPrompt += m.l10n.Pick(
 		"\n\n# AFTER operating rules\nThe human makes every consequential decision. Preserve approved constraints and stop with DECISION_REQUIRED when one is missing. Mark every inference not grounded in project evidence as ASSUMPTION. Mark security-sensitive code involving authentication, payments, permissions, secrets, or personal data as REQUIRES_REVIEW. Generate tests with every behavior change, covering the nominal case, an edge case, and an error case. Treat generated output as unverified until commands prove it. Your response must be self-contained for a future session with no conversational memory.",
 		"\n\n# Règles d'opération AFTER\nLa personne responsable prend chaque décision conséquente. Respecte les contraintes approuvées et arrête-toi avec DECISION_REQUIRED lorsqu'une décision manque. Marque toute inférence non fondée sur le projet par ASSUMPTION. Marque le code sensible touchant l'authentification, les paiements, les permissions, les secrets ou les données personnelles par REQUIRES_REVIEW. Génère les tests avec chaque changement de comportement, couvrant le cas nominal, un cas limite et un cas d'erreur. Toute sortie générée demeure non vérifiée jusqu'à preuve par commandes. Ta réponse doit être autonome pour une session future sans mémoire conversationnelle.",

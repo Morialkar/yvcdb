@@ -108,6 +108,80 @@ func TestResumePromptViewShowsCandidate(t *testing.T) {
 	}
 }
 
+func TestResumeMarkerForRun(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil, workflow)
+	m.state = stateStage
+	seqRun := &phaseRun{phaseIdx: 2, workDir: m.ProjectDir, branch: "refactor/ts/security"}
+	marker := m.resumeMarkerForRun(seqRun)
+	if marker == nil {
+		t.Fatal("expected resume marker for sequential run")
+	}
+	if marker.WorkflowMode != workflow.Mode || marker.PhaseIndex != seqRun.phaseIdx || marker.BranchName != seqRun.branch {
+		t.Fatalf("unexpected marker: %+v", marker)
+	}
+	parallelRun := &phaseRun{phaseIdx: 2, workDir: filepath.Join(t.TempDir(), "wt"), branch: "refactor/ts/security"}
+	if marker := m.resumeMarkerForRun(parallelRun); marker != nil {
+		t.Fatalf("expected no marker for parallel run, got %+v", marker)
+	}
+}
+
+func TestResumedPhaseSystemPromptIncludesPreamble(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AFTER_STANDARDS.md"), []byte("standards"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name      string
+		language  string
+		wantTitle string
+		wantBody  string
+	}{
+		{name: "english", language: "en", wantTitle: "Resume instructions", wantBody: "REFACTOR_STATE.md"},
+		{name: "french", language: "fr", wantTitle: "Consignes de reprise", wantBody: "REFACTOR_STATE.md"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(dir, 0, true, "claude", "sonnet", 2, tt.language, testPrompts(), nil, workflow)
+			run := &phaseRun{phaseIdx: 0, iteration: 2, workDir: dir, resumed: true}
+			prompt, err := m.phaseSystemPrompt(run, workflow.Phases[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(prompt, tt.wantTitle) || !strings.Contains(prompt, tt.wantBody) {
+				t.Fatalf("resume preamble missing: %q", prompt)
+			}
+		})
+	}
+}
+
+func TestNonResumedPhaseSystemPromptOmitsPreamble(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AFTER_STANDARDS.md"), []byte("standards"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", testPrompts(), nil, workflow)
+	run := &phaseRun{phaseIdx: 0, iteration: 1, workDir: dir}
+	prompt, err := m.phaseSystemPrompt(run, workflow.Phases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "Resume instructions") || strings.Contains(prompt, "REFACTOR_STATE.md") {
+		t.Fatalf("unexpected resume preamble: %q", prompt)
+	}
+}
+
 func TestDiscardResumeCandidateRemovesArtifactsAndReturnsToModelSelect(t *testing.T) {
 	dir := newGitRepo(t)
 	workflow, err := phases.ForMode(phases.ModeRefactor)
@@ -170,6 +244,10 @@ func TestResumeInterruptedPhaseUsesRecordedProviderModelAndIteration(t *testing.
 	timestamp := "20260101_010203"
 	branch := "refactor/" + timestamp + "/" + workflow.Phases[0].ID
 	runTestGit(t, dir, "checkout", "-b", branch)
+	promptFile := filepath.Join(dir, ".yvcdb_refactor_iter3.md")
+	if err := os.WriteFile(promptFile, []byte("stale prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	marker := &runner.ResumeMarker{
 		WorkflowMode:     workflow.Mode,
 		PhaseIndex:       0,
@@ -179,6 +257,7 @@ func TestResumeInterruptedPhaseUsesRecordedProviderModelAndIteration(t *testing.
 		Provider:         "claude",
 		Model:            "sonnet",
 		SessionTimestamp: timestamp,
+		PromptFilePath:   promptFile,
 	}
 	m := NewModel(dir, 0, false, "opencode", "wrong", 2, "en", testPrompts(), marker, workflow)
 	updated, _ := m.handleKey(key(tea.KeyRunes, 'r'))
@@ -206,6 +285,9 @@ func TestResumeInterruptedPhaseUsesRecordedProviderModelAndIteration(t *testing.
 	}
 	if m.timestamp != timestamp {
 		t.Fatalf("expected resumed timestamp %q, got %q", timestamp, m.timestamp)
+	}
+	if _, err := os.Stat(promptFile); !os.IsNotExist(err) {
+		t.Fatalf("stale prompt file should be removed on resume, got err=%v", err)
 	}
 	cancelRuns(m)
 	m = drainActiveRuns(t, m)
