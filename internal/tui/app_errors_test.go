@@ -9,6 +9,7 @@ import (
 
 	gitops "github.com/Morialkar/yvcdb/internal/git"
 	"github.com/Morialkar/yvcdb/internal/phases"
+	"github.com/Morialkar/yvcdb/internal/runner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -36,13 +37,261 @@ func cancelRuns(m Model) {
 }
 
 func TestNewModelDefaultsModelFromProvider(t *testing.T) {
-	m := NewModel(t.TempDir(), 2, true, "codex", "  ", 2, "en", testPrompts())
-	if m.AgentModel != "gpt-5.4" {
-		t.Fatalf("expected suggested codex model, got %q", m.AgentModel)
+	tests := []struct {
+		name     string
+		provider string
+		want     string
+	}{
+		{name: "claude", provider: "claude", want: "sonnet"},
+		{name: "codex", provider: "codex", want: "gpt-5.4"},
 	}
-	if m.stageIdx != 2 {
-		t.Fatalf("expected stage containing phase 2, got %d", m.stageIdx)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(t.TempDir(), 2, true, tt.provider, "  ", 2, "en", testPrompts(), nil)
+			if m.AgentModel != tt.want {
+				t.Fatalf("expected suggested %s model, got %q", tt.provider, m.AgentModel)
+			}
+			if m.stageIdx != 2 {
+				t.Fatalf("expected stage containing phase 2, got %d", m.stageIdx)
+			}
+		})
 	}
+}
+
+func TestResumeHelpersAcrossWorkflowModes(t *testing.T) {
+	baseWorkflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name     string
+		mode     string
+		artifact string
+	}{
+		{name: "greenfield", mode: phases.ModeGreenfield, artifact: "AFTER_SPEC.md"},
+		{name: "feature", mode: phases.ModeFeature, artifact: "AFTER_PLAN.md"},
+		{name: "debug", mode: phases.ModeDebug, artifact: "AFTER_BUG.md"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			marker := &runner.ResumeMarker{
+				WorkflowMode: tt.mode,
+				PhaseIndex:   0,
+				PhaseID:      baseWorkflow.Phases[0].ID,
+				BranchName:   "refactor/ts/diagnostic",
+			}
+			m := NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "en", testPrompts(), marker, baseWorkflow)
+			if got := m.resumeWorkflow(); got.Mode != tt.mode {
+				t.Fatalf("resume workflow mode = %s, want %s", got.Mode, tt.mode)
+			}
+			if got := m.resumeStateArtifactName(); got != tt.artifact {
+				t.Fatalf("resume state artifact = %s, want %s", got, tt.artifact)
+			}
+		})
+	}
+}
+
+func TestResumeHelpersFallbackToCurrentWorkflow(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := &runner.ResumeMarker{
+		WorkflowMode: "unknown",
+		PhaseIndex:   0,
+		PhaseID:      workflow.Phases[0].ID,
+		BranchName:   "refactor/ts/diagnostic",
+	}
+	m := NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "en", testPrompts(), marker, workflow)
+	if got := m.resumeWorkflow(); got.Mode != workflow.Mode {
+		t.Fatalf("resume workflow should fall back to current mode, got %s", got.Mode)
+	}
+	if got := m.resumeStateArtifactName(); got != "REFACTOR_STATE.md" {
+		t.Fatalf("resume state artifact should fall back to refactor state, got %s", got)
+	}
+}
+
+func TestRenderResumePromptBranches(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "en", testPrompts(), nil, workflow)
+	if got := m.renderResumePrompt(); got != "" {
+		t.Fatalf("expected empty prompt without candidate, got %q", got)
+	}
+	marker := &runner.ResumeMarker{
+		WorkflowMode: workflow.Mode,
+		PhaseIndex:   -1,
+		PhaseID:      "custom-phase",
+		Iteration:    4,
+		BranchName:   "refactor/ts/custom",
+	}
+	m = NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "fr", testPrompts(), marker, workflow)
+	got := m.renderResumePrompt()
+	for _, want := range []string{"Reprendre la phase interrompue ?", "custom-phase", "Itération : 4", "Branche : refactor/ts/custom"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("resume prompt missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestResumeInterruptedPhaseFallbackBranches(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("nil candidate", func(t *testing.T) {
+		m := NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "en", testPrompts(), nil, workflow)
+		updated, _ := m.resumeInterruptedPhase()
+		if updated.state != stateModelSelect {
+			t.Fatalf("expected model select, got %v", updated.state)
+		}
+	})
+
+	t.Run("phase not in workflow stages", func(t *testing.T) {
+		dir := newGitRepo(t)
+		marker := &runner.ResumeMarker{
+			WorkflowMode:   workflow.Mode,
+			PhaseIndex:     2,
+			PhaseID:        workflow.Phases[2].ID,
+			BranchName:     "refactor/ts/security",
+			PromptFilePath: filepath.Join(dir, ".yvcdb_security_iter2.md"),
+		}
+		_ = os.WriteFile(marker.PromptFilePath, []byte("prompt"), 0o644)
+		_ = runner.WriteResumeMarker(filepath.Join(dir, ".yvcdb_resume.json"), *marker)
+		m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), marker, workflow)
+		m.Workflow.Stages = [][]int{{0}, {1}, {3}, {4}, {5}}
+		updated, _ := m.resumeInterruptedPhase()
+		if updated.state != stateModelSelect || !strings.Contains(updated.statusMsg, "no longer exists") {
+			t.Fatalf("expected missing-branch fallback, got state=%v msg=%q", updated.state, updated.statusMsg)
+		}
+	})
+
+	t.Run("parallel stage declined", func(t *testing.T) {
+		dir := newGitRepo(t)
+		marker := &runner.ResumeMarker{
+			WorkflowMode:   workflow.Mode,
+			PhaseIndex:     0,
+			PhaseID:        workflow.Phases[0].ID,
+			BranchName:     "refactor/ts/diagnostic",
+			PromptFilePath: filepath.Join(dir, ".yvcdb_diagnostic_iter2.md"),
+		}
+		_ = os.WriteFile(marker.PromptFilePath, []byte("prompt"), 0o644)
+		_ = runner.WriteResumeMarker(filepath.Join(dir, ".yvcdb_resume.json"), *marker)
+		m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), marker, workflow)
+		m.Workflow.Stages = [][]int{{0, 1}, {2}, {3, 4}, {5}}
+		updated, _ := m.resumeInterruptedPhase()
+		if updated.state != stateModelSelect || !strings.Contains(updated.statusMsg, "parallel stage is not supported") {
+			t.Fatalf("expected parallel fallback, got state=%v msg=%q", updated.state, updated.statusMsg)
+		}
+	})
+
+	t.Run("git checkout error", func(t *testing.T) {
+		marker := &runner.ResumeMarker{
+			WorkflowMode:   workflow.Mode,
+			PhaseIndex:     0,
+			PhaseID:        workflow.Phases[0].ID,
+			BranchName:     "refactor/ts/diagnostic",
+			PromptFilePath: filepath.Join(t.TempDir(), ".yvcdb_diagnostic_iter2.md"),
+		}
+		m := NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts(), marker, workflow)
+		updated, _ := m.resumeInterruptedPhase()
+		if updated.state != stateModelSelect || updated.statusMsg == "" {
+			t.Fatalf("expected checkout/branch error fallback, got state=%v msg=%q", updated.state, updated.statusMsg)
+		}
+	})
+}
+
+func TestPhaseStateCoversDoneActiveAndPending(t *testing.T) {
+	m := newTestModel(t)
+	m.Workflow.Stages = [][]int{{0}, {1}, {2, 3}, {4}, {5}}
+	m.stageIdx = 1
+	if state, iter := m.phaseState(0); state != "done" || iter != 0 {
+		t.Fatalf("phase 0 should be done, got %s iter %d", state, iter)
+	}
+	m.runs = []*phaseRun{{phaseIdx: 1, status: runActive, iteration: 1}}
+	if state, iter := m.phaseState(1); state != "active" || iter != 1 {
+		t.Fatalf("phase 1 should be active, got %s iter %d", state, iter)
+	}
+	m.runs = []*phaseRun{{phaseIdx: 1, status: runApproved, iteration: 2}}
+	if state, iter := m.phaseState(1); state != "done" || iter != 0 {
+		t.Fatalf("approved phase should be done, got %s iter %d", state, iter)
+	}
+	m.stageIdx = 3
+	if state, iter := m.phaseState(4); state != "pending" || iter != 0 {
+		t.Fatalf("phase 4 should be pending, got %s iter %d", state, iter)
+	}
+}
+
+func TestResumeMarkerForRunSkipsFixState(t *testing.T) {
+	m := newTestModel(t)
+	m.state = stateFixRun
+	if got := m.resumeMarkerForRun(&phaseRun{phaseIdx: 0, workDir: m.ProjectDir, branch: "refactor/ts/diagnostic"}); got != nil {
+		t.Fatalf("expected no marker during fix state, got %#v", got)
+	}
+}
+
+func TestNewModelKeepsOpenCodeModelBlankAndUsesOpenCodeMessage(t *testing.T) {
+	m := NewModel(t.TempDir(), 2, true, "opencode", "  ", 2, "en", testPrompts(), nil)
+	if m.AgentModel != "" {
+		t.Fatalf("expected blank OpenCode model, got %q", m.AgentModel)
+	}
+	view := m.View()
+	if !strings.Contains(view, "OpenCode default (configured in your OpenCode settings)") {
+		t.Fatalf("expected OpenCode default message, got %q", view)
+	}
+	if !strings.Contains(view, "Cost and plan usage depend on the selected model.") {
+		t.Fatalf("expected cost warning, got %q", view)
+	}
+
+	fr := NewModel(t.TempDir(), 2, true, "opencode", "  ", 2, "fr", testPrompts(), nil)
+	frView := fr.View()
+	if !strings.Contains(frView, "Modèle par défaut d'OpenCode") || !strings.Contains(frView, "configuré dans vos paramètres") {
+		t.Fatalf("expected French OpenCode default message, got %q", frView)
+	}
+}
+
+func TestOpenCodeModelSelectAllowsBlankAndShowsExplicitModel(t *testing.T) {
+	installFakeOpenCode(t)
+	blank := NewModel(t.TempDir(), 0, true, "opencode", "  ", 2, "en", testPrompts(), nil)
+	if blank.AgentModel != "" {
+		t.Fatalf("expected blank OpenCode model, got %q", blank.AgentModel)
+	}
+	updated, _ := blank.handleKey(key(tea.KeyEnter, 0))
+	blank = updated.(Model)
+	if blank.state != stateStage {
+		t.Fatalf("blank OpenCode model should advance, got state %v", blank.state)
+	}
+	blank = drainActiveRuns(t, blank)
+	cancelRuns(blank)
+
+	explicit := NewModel(t.TempDir(), 0, true, "opencode", "custom/model", 2, "en", testPrompts(), nil)
+	if explicit.AgentModel != "custom/model" {
+		t.Fatalf("expected explicit OpenCode model, got %q", explicit.AgentModel)
+	}
+	view := explicit.View()
+	if !strings.Contains(view, "custom/model") {
+		t.Fatalf("expected explicit model in view, got %q", view)
+	}
+	if strings.Contains(view, "OpenCode default (configured in your OpenCode settings)") {
+		t.Fatalf("default message should not show for explicit model, got %q", view)
+	}
+}
+
+func installFakeOpenCode(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode")
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"text","part":{"text":"opencode ready"}}'
+printf '%s\n' '{"type":"result","result":"done"}'
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func TestUpdateMessageEdgeCases(t *testing.T) {
@@ -93,7 +342,7 @@ func TestModelSelectKeys(t *testing.T) {
 	}
 
 	// enter without git repo and NoGit=false goes to git setup
-	m = NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m = NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.input.SetValue("sonnet")
 	updated, _ = m.handleKey(key(tea.KeyEnter, 0))
 	m = updated.(Model)
@@ -247,7 +496,7 @@ func TestStartStageGitBranching(t *testing.T) {
 	installFakeClaude(t)
 	dir := newGitRepo(t)
 
-	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.useGit = true
 	m.state = stateStage
 	m.stageIdx = 0
@@ -259,7 +508,7 @@ func TestStartStageGitBranching(t *testing.T) {
 	cancelRuns(m)
 
 	// second start with the same timestamp: branch already exists
-	m2 := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m2 := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m2.useGit = true
 	m2.state = stateStage
 	m2.stageIdx = 0
@@ -300,7 +549,7 @@ func TestStartStageGitFailures(t *testing.T) {
 
 func TestStartStageSkipsPhasesBeforeStartPhase(t *testing.T) {
 	installFakeClaude(t)
-	m := NewModel(t.TempDir(), 5, true, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(t.TempDir(), 5, true, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.state = stateStage
 	m.stageIdx = 0 // stages 0..2 contain phases < 5 only: all skipped
 	m, _ = m.startStage()
@@ -369,7 +618,7 @@ func TestCheckStageDoneGitFailures(t *testing.T) {
 
 	// worktree removal fails for a skipped run pointing at a bogus dir
 	dir := newGitRepo(t)
-	m = NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m = NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.useGit = true
 	m.stageIdx = 2
 	m.runs = []*phaseRun{
@@ -384,7 +633,7 @@ func TestCheckStageDoneGitFailures(t *testing.T) {
 
 func TestCheckStageDoneRebaseConflict(t *testing.T) {
 	dir := newGitRepo(t)
-	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.Workflow.Stages = [][]int{{0}, {1}, {2, 3, 4}, {5}}
 	m.useGit = true
 	m.stageIdx = 2
@@ -422,7 +671,7 @@ func TestDoGitInitSupportsEmptyGreenfieldProject(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_NAME", "YVCDB Test")
 	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
 	// Empty greenfield projects need an initial commit before phase branches.
-	m := NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	msg := m.doGitInit()()
 	done, ok := msg.(gitSetupDoneMsg)
 	if !ok || done.err != nil || !done.useGit {

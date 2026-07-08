@@ -6,7 +6,7 @@
 
 *[English documentation](README.md)*
 
-YVCDB est un CLI interactif qui applique la méthodologie AFTER via Claude Code ou Codex CLI. Il peut refactorer une codebase existante ou guider un projet neuf de la spécification à la revue contradictoire, avec une approbation humaine après chaque phase.
+YVCDB est un CLI interactif qui applique la méthodologie AFTER via Claude Code, Codex CLI ou OpenCode. Il peut refactorer une codebase existante ou guider un projet neuf de la spécification à la revue contradictoire, avec une approbation humaine après chaque phase.
 
 L'interface est en anglais par défaut et supporte aussi le français.
 
@@ -20,7 +20,7 @@ YVCDB est l'implémentation de référence de la moitié « Test Everything Rigo
 ## Prérequis
 
 - Go 1.26 ou plus récent
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) ou Codex CLI
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), Codex CLI ou [OpenCode](https://opencode.ai)
 - Git, sauf si YVCDB est lancé avec `--no-git`
 - Une session authentifiée pour le fournisseur choisi
 
@@ -30,10 +30,13 @@ Vérifiez Go, Git et le fournisseur que vous comptez utiliser :
 go version
 git --version
 
-# L'un des deux est requis :
+# L'un d'eux est requis :
 claude --version
 codex --version
+opencode --version
 ```
+
+OpenCode prend en charge plus de 75 fournisseurs de modèles, dont des API à palier gratuit et des modèles entièrement locaux via Ollama, ce qui permet des workflows AFTER complets à coût nul. Authentifiez-le une fois avec `opencode auth login`.
 
 ## Installation
 
@@ -87,8 +90,8 @@ yvcdb config
 Il configure :
 
 - la langue de l'interface et des réponses : `en` ou `fr` ;
-- le fournisseur de CLI IA : `claude` ou `codex` ;
-- le modèle par défaut du fournisseur, comme `sonnet` pour Claude ou `gpt-5.4` pour Codex.
+- le fournisseur de CLI IA : `claude`, `codex` ou `opencode` ;
+- le modèle par défaut du fournisseur, comme `sonnet` pour Claude ou `gpt-5.4` pour Codex. Laissez le modèle vide pour OpenCode afin d'utiliser le défaut configuré dans vos paramètres OpenCode.
 
 Les défauts sont anglais, Claude et `sonnet`. Sur macOS, la configuration est stockée dans :
 
@@ -108,7 +111,7 @@ Le fichier persistant peut aussi être édité directement :
 }
 ```
 
-Codex s'exécute en mode non interactif avec sortie JSONL, sessions éphémères et sandbox `workspace-write`. Claude utilise son mode de sortie `stream-json`.
+Codex s'exécute en mode non interactif avec sortie JSONL, sessions éphémères et sandbox `workspace-write`. Claude utilise son mode de sortie `stream-json`. OpenCode s'exécute en mode non interactif avec sortie JSON et permissions auto-approuvées afin qu'une phase ne bloque jamais sur une invite.
 
 YVCDB embarque des jeux de prompts parallèles en anglais et en français. La langue configurée sélectionne à la fois les chaînes d'interface et le jeu de prompts embarqué.
 
@@ -142,7 +145,7 @@ Drapeaux disponibles :
 
 | Drapeau | Description |
 | --- | --- |
-| `--provider claude\|codex` | Surcharge le fournisseur de CLI IA configuré pour cette exécution |
+| `--provider claude\|codex\|opencode` | Surcharge le fournisseur de CLI IA configuré pour cette exécution |
 | `--model <modèle>` | Surcharge le modèle configuré pour cette exécution |
 | `--lang en\|fr` | Surcharge la langue configurée pour cette exécution |
 | `--max-turns <n>` | Nombre maximum de tours pour Claude ; défaut : `20`. Codex CLI n'a pas d'équivalent |
@@ -216,6 +219,8 @@ Quand l'intégration Git est active, YVCDB :
 - commit les changements approuvés ;
 
 Si une création de branche, un commit, un rebase ou un merge échoue, YVCDB arrête ce chemin et signale l'erreur au lieu d'avancer silencieusement. Les rebases en conflit sont annulés et leurs worktrees préservés pour une résolution manuelle. Lancez l'outil avec un arbre de travail propre pour des résultats prévisibles.
+
+Si une phase est interrompue, par exemple avec Ctrl+C pendant une exécution, YVCDB conserve un petit marqueur de reprise exclu par Git. Au lancement suivant dans ce projet, il propose de reprendre la même phase sur la même branche et de continuer à partir de l'arbre de travail et du fichier d'état de phase, ou de supprimer l'état enregistré et nettoyer. Un `--phase` ou `--mode` explicite masque cette proposition. La reprise des phases parallèles n'est pas encore prise en charge.
 
 ## Logs
 

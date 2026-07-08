@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +55,16 @@ func TestRepositoryQueries(t *testing.T) {
 	}
 	if !exists {
 		t.Fatal("created branch was not found")
+	}
+	if err := Checkout(dir, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := CurrentBranch(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branch != "feature" {
+		t.Fatalf("expected to switch to feature, got %q", branch)
 	}
 }
 
@@ -115,6 +126,70 @@ func TestWorktreeRebaseAndFastForward(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "feature.txt")); err != nil {
 		t.Fatalf("merged file missing: %v", err)
 	}
+}
+
+func TestEnsureInfoExcludeEntryIsIdempotent(t *testing.T) {
+	dir := initRepo(t)
+	entry := ".yvcdb_*"
+	added, err := EnsureInfoExcludeEntry(dir, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !added {
+		t.Fatal("expected entry to be added")
+	}
+	added, err = EnsureInfoExcludeEntry(dir, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added {
+		t.Fatal("expected second call to be idempotent")
+	}
+	path := resolveGitPath(t, dir, runGitOutput(t, dir, "rev-parse", "--git-path", "info/exclude"))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), entry); got != 1 {
+		t.Fatalf("expected one entry, got %d in %q", got, data)
+	}
+}
+
+func TestEnsureInfoExcludeEntryResolvesWorktreeCommonGitDir(t *testing.T) {
+	dir := initRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAll(dir, "base"); err != nil {
+		t.Fatal(err)
+	}
+	worktree := filepath.Join(t.TempDir(), "feature-worktree")
+	if err := WorktreeAdd(dir, worktree, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = WorktreeRemove(dir, worktree)
+	})
+	entry := ".yvcdb_*"
+	if _, err := EnsureInfoExcludeEntry(worktree, entry); err != nil {
+		t.Fatal(err)
+	}
+	helperPath := resolveGitPath(t, worktree, runGitOutput(t, worktree, "rev-parse", "--git-path", "info/exclude"))
+	data, err := os.ReadFile(helperPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), entry) {
+		t.Fatalf("expected entry in worktree exclude path %s: %q", helperPath, data)
+	}
+}
+
+func resolveGitPath(t *testing.T, baseDir, path string) string {
+	t.Helper()
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(baseDir, path)
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

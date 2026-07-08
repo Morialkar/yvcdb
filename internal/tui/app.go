@@ -37,6 +37,7 @@ type appState int
 
 const (
 	stateModelSelect appState = iota
+	stateResumePrompt
 	stateGitSetup
 	stateStage    // one or more runs in progress / awaiting decision
 	stateFeedback // free-form refinement for the selected run
@@ -71,6 +72,7 @@ type gitSetupDoneMsg struct {
 type phaseRun struct {
 	phaseIdx  int
 	iteration int
+	resumed   bool
 	lines     []string
 	status    runStatus
 	workDir   string // worktree dir (parallel) or project dir
@@ -91,16 +93,17 @@ type ChecklistItem struct {
 
 // Model is the Bubble Tea application model.
 type Model struct {
-	ProjectDir string
-	StartPhase int
-	NoGit      bool
-	Provider   string
-	AgentModel string
-	MaxTurns   int
-	Language   string
-	Prompts    map[string]string
-	Workflow   phases.Workflow
-	l10n       i18n.Localizer
+	ProjectDir      string
+	StartPhase      int
+	NoGit           bool
+	Provider        string
+	AgentModel      string
+	ResumeCandidate *runner.ResumeMarker
+	MaxTurns        int
+	Language        string
+	Prompts         map[string]string
+	Workflow        phases.Workflow
+	l10n            i18n.Localizer
 
 	state     appState
 	stageIdx  int
@@ -125,7 +128,7 @@ type Model struct {
 }
 
 // NewModel constructs the YVCDB application model.
-func NewModel(projectDir string, startPhase int, noGit bool, provider, model string, maxTurns int, language string, prompts map[string]string, workflows ...phases.Workflow) Model {
+func NewModel(projectDir string, startPhase int, noGit bool, provider, model string, maxTurns int, language string, prompts map[string]string, resumeCandidate *runner.ResumeMarker, workflows ...phases.Workflow) Model {
 	ts := time.Now().Format(sessionTimestampFormat)
 	vp := viewport.New(defaultViewportWidth, defaultViewportHeight)
 	l10n := i18n.New(language)
@@ -191,12 +194,18 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 
 	useGit := !noGit && git.IsRepo(projectDir)
 	state := stateModelSelect
+	if resumeCandidate != nil {
+		state = stateResumePrompt
+	}
 	if strings.TrimSpace(model) == "" {
 		model = appconfig.SuggestedModel(provider)
 	}
 	input := textinput.New()
 	input.Prompt = l10n.T("model.prompt")
 	input.Placeholder = appconfig.SuggestedModel(provider)
+	if strings.TrimSpace(input.Placeholder) == "" {
+		input.Placeholder = l10n.T("model.default")
+	}
 	input.SetValue(model)
 	input.CharLimit = modelInputCharLimit
 	input.Width = 48
@@ -213,26 +222,27 @@ func NewModel(projectDir string, startPhase int, noGit bool, provider, model str
 	}
 
 	return Model{
-		ProjectDir: projectDir,
-		StartPhase: startPhase,
-		NoGit:      noGit,
-		Provider:   provider,
-		AgentModel: model,
-		MaxTurns:   maxTurns,
-		Language:   l10n.Language,
-		Prompts:    prompts,
-		Workflow:   workflow,
-		l10n:       l10n,
-		timestamp:  ts,
-		logDir:     filepath.Join(projectDir, logDirectoryName),
-		stageIdx:   stageIdx,
-		viewport:   vp,
-		input:      input,
-		checkItems: items,
-		termW:      defaultViewportWidth,
-		termH:      defaultTerminalHeight,
-		state:      state,
-		useGit:     useGit,
+		ProjectDir:      projectDir,
+		StartPhase:      startPhase,
+		NoGit:           noGit,
+		Provider:        provider,
+		AgentModel:      model,
+		ResumeCandidate: resumeCandidate,
+		MaxTurns:        maxTurns,
+		Language:        l10n.Language,
+		Prompts:         prompts,
+		Workflow:        workflow,
+		l10n:            l10n,
+		timestamp:       ts,
+		logDir:          filepath.Join(projectDir, logDirectoryName),
+		stageIdx:        stageIdx,
+		viewport:        vp,
+		input:           input,
+		checkItems:      items,
+		termW:           defaultViewportWidth,
+		termH:           defaultTerminalHeight,
+		state:           state,
+		useGit:          useGit,
 	}
 }
 
@@ -322,7 +332,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case stateModelSelect:
 		switch key {
 		case "enter":
-			if model := strings.TrimSpace(m.input.Value()); model != "" {
+			if model := strings.TrimSpace(m.input.Value()); model != "" || appconfig.SuggestedModel(m.Provider) == "" {
 				m.AgentModel = model
 				m.input.Blur()
 				if !m.NoGit && !m.useGit {
@@ -338,6 +348,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
+
+	case stateResumePrompt:
+		switch key {
+		case "r", "R", "enter":
+			return m.resumeInterruptedPhase()
+		case "d", "D", "esc":
+			return m.discardResumeCandidate("")
+		}
+		return m, nil
 
 	case stateFeedback:
 		switch key {
@@ -474,6 +493,8 @@ func (m Model) View() string {
 	switch m.state {
 	case stateModelSelect:
 		b.WriteString(m.renderModelSelect())
+	case stateResumePrompt:
+		b.WriteString(m.renderResumePrompt())
 	case stateGitSetup:
 		b.WriteString(m.renderGitSetup())
 	case stateStage, stateFixRun:
@@ -600,8 +621,67 @@ func (m Model) renderGitSetup() string {
 func (m Model) renderModelSelect() string {
 	title := styleBold.Render(m.l10n.T("model.title", strings.ToUpper(m.Provider)))
 	help := styleDim.Render(m.l10n.T("model.help"))
+	extra := ""
+	if strings.TrimSpace(m.AgentModel) == "" && appconfig.SuggestedModel(m.Provider) == "" {
+		extra = "\n" + styleDim.Render(m.l10n.T("model.default"))
+	}
 	warn := styleWarn.Render(m.l10n.T("model.warning"))
-	return styleDecisionBox.Width(64).Render(title + "\n" + help + "\n\n" + m.input.View() + "\n\n" + warn + "\n" + styleDim.Render(m.l10n.T("confirm.quit")))
+	return styleDecisionBox.Width(64).Render(title + "\n" + help + "\n\n" + m.input.View() + extra + "\n\n" + warn + "\n" + styleDim.Render(m.l10n.T("confirm.quit")))
+}
+
+func (m Model) renderResumePrompt() string {
+	if m.ResumeCandidate == nil {
+		return ""
+	}
+	candidate := m.ResumeCandidate
+	workflow := m.resumeWorkflow()
+	phaseName := candidate.PhaseID
+	if candidate.PhaseIndex >= 0 && candidate.PhaseIndex < len(workflow.Phases) {
+		phase := workflow.Phases[candidate.PhaseIndex]
+		phaseName = fmt.Sprintf("%s — %s", phase.Label, m.phaseTitle(phase.ID))
+	}
+	lines := []string{
+		styleBold.Render(m.l10n.T("resume.title")),
+		styleDim.Render(m.l10n.T("resume.body")),
+		"",
+		styleDim.Render(m.l10n.T("resume.mode", candidate.WorkflowMode)),
+		styleDim.Render(m.l10n.T("resume.phase", phaseName)),
+		styleDim.Render(m.l10n.T("resume.iteration", candidate.Iteration)),
+		styleDim.Render(m.l10n.T("resume.branch", candidate.BranchName)),
+		"",
+		styleSuccess.Render("[r]") + " " + m.l10n.T("resume.resume") + "   " + styleWarn.Render("[d/esc]") + " " + m.l10n.T("resume.discard"),
+	}
+	width := m.termW - 8
+	if width < 40 {
+		width = 40
+	}
+	return styleDecisionBox.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) resumeWorkflow() phases.Workflow {
+	if m.ResumeCandidate != nil {
+		if mode := strings.TrimSpace(m.ResumeCandidate.WorkflowMode); mode != "" && mode != m.Workflow.Mode {
+			if workflow, err := phases.ForMode(mode); err == nil {
+				return workflow
+			}
+		}
+	}
+	return m.Workflow
+}
+
+func (m Model) resumeStateArtifactName() string {
+	switch m.resumeWorkflow().Mode {
+	case phases.ModeRefactor:
+		return "REFACTOR_STATE.md"
+	case phases.ModeGreenfield:
+		return "AFTER_SPEC.md"
+	case phases.ModeFeature:
+		return "AFTER_PLAN.md"
+	case phases.ModeDebug:
+		return "AFTER_BUG.md"
+	default:
+		return "the phase state file"
+	}
 }
 
 func (m Model) renderFeedback() string {
@@ -754,6 +834,79 @@ func (m Model) renderDone() string {
 	return b.String()
 }
 
+func (m Model) resumeInterruptedPhase() (Model, tea.Cmd) {
+	candidate := m.ResumeCandidate
+	if candidate == nil {
+		m.state = stateModelSelect
+		return m, nil
+	}
+	m.Workflow = m.resumeWorkflow()
+	if candidate.PhaseIndex < 0 || candidate.PhaseIndex >= len(m.Workflow.Phases) {
+		return m.discardResumeCandidate(m.l10n.T("resume.branch_missing", candidate.BranchName))
+	}
+	stageIdx := m.stageIndexForPhase(candidate.PhaseIndex)
+	if stageIdx < 0 {
+		return m.discardResumeCandidate(m.l10n.T("resume.branch_missing", candidate.BranchName))
+	}
+	stage := m.Workflow.Stages[stageIdx]
+	if len(stage) > 1 {
+		return m.discardResumeCandidate(m.l10n.T("resume.parallel_unsupported"))
+	}
+	branchExists, err := git.BranchExists(m.ProjectDir, candidate.BranchName)
+	if err != nil {
+		return m.discardResumeCandidate(err.Error())
+	}
+	if !branchExists {
+		return m.discardResumeCandidate(m.l10n.T("resume.branch_missing", candidate.BranchName))
+	}
+	if err := git.Checkout(m.ProjectDir, candidate.BranchName); err != nil {
+		return m.discardResumeCandidate(err.Error())
+	}
+	if candidate.PromptFilePath != "" {
+		_ = os.Remove(candidate.PromptFilePath)
+	}
+	m.Provider = candidate.Provider
+	m.AgentModel = candidate.Model
+	m.StartPhase = candidate.PhaseIndex
+	if candidate.SessionTimestamp != "" {
+		m.timestamp = candidate.SessionTimestamp
+	}
+	m.stageIdx = stageIdx
+	m.state = stateStage
+	m.statusMsg = ""
+	resumed, cmd := m.startStage()
+	resumed.ResumeCandidate = nil
+	return resumed, cmd
+}
+
+func (m Model) discardResumeCandidate(message string) (Model, tea.Cmd) {
+	if m.ResumeCandidate != nil {
+		if m.ResumeCandidate.PromptFilePath != "" {
+			_ = os.Remove(m.ResumeCandidate.PromptFilePath)
+		}
+		_ = os.Remove(filepath.Join(m.ProjectDir, ".yvcdb_resume.json"))
+		m.ResumeCandidate = nil
+	}
+	m.state = stateModelSelect
+	if message != "" {
+		m.statusMsg = styleWarn.Render("⚠ " + message)
+	} else {
+		m.statusMsg = ""
+	}
+	return m, nil
+}
+
+func (m Model) stageIndexForPhase(phaseIdx int) int {
+	for si, stage := range m.Workflow.Stages {
+		for _, pi := range stage {
+			if pi == phaseIdx {
+				return si
+			}
+		}
+	}
+	return -1
+}
+
 // ─── Stage orchestration ─────────────────────────────────────────────────────
 
 func (m Model) startStage() (Model, tea.Cmd) {
@@ -774,9 +927,16 @@ func (m Model) startStage() (Model, tea.Cmd) {
 			continue
 		}
 		p := m.Workflow.Phases[phaseIdx]
+		iteration := 1
+		resumed := false
+		if m.ResumeCandidate != nil && m.ResumeCandidate.PhaseIndex == phaseIdx {
+			iteration = m.ResumeCandidate.Iteration
+			resumed = true
+		}
 		r := &phaseRun{
 			phaseIdx:  phaseIdx,
-			iteration: 1,
+			iteration: iteration,
+			resumed:   resumed,
 			workDir:   m.ProjectDir,
 			branch:    fmt.Sprintf("%s/%s/%s", m.Workflow.Mode, m.timestamp, p.ID),
 		}
@@ -823,6 +983,17 @@ func (m Model) startStage() (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m Model) resumeMarkerForRun(r *phaseRun) *runner.ResumeMarker {
+	if r == nil || r.workDir != m.ProjectDir || m.state == stateFixRun {
+		return nil
+	}
+	return &runner.ResumeMarker{
+		WorkflowMode: m.Workflow.Mode,
+		PhaseIndex:   r.phaseIdx,
+		BranchName:   r.branch,
+	}
+}
+
 func (m *Model) launchRun(slot int) tea.Cmd {
 	r := m.runs[slot]
 	p := m.Workflow.Phases[r.phaseIdx]
@@ -839,15 +1010,24 @@ func (m *Model) launchRun(slot int) tea.Cmd {
 	r.lines = nil
 	r.status = runActive
 
-	r.cancel = runner.RunPhase(r.workDir, m.logDir, m.timestamp, p.ID, r.iteration, systemPrompt, runner.Options{
-		Provider: m.Provider, Model: m.AgentModel, MaxTurns: m.MaxTurns, Feedback: r.feedback, Language: m.Language,
-	}, r.lineCh, r.doneCh)
+	opts := runner.Options{
+		Provider:     m.Provider,
+		Model:        m.AgentModel,
+		MaxTurns:     m.MaxTurns,
+		Feedback:     r.feedback,
+		Language:     m.Language,
+		ResumeMarker: m.resumeMarkerForRun(r),
+	}
+	r.cancel = runner.RunPhase(r.workDir, m.logDir, m.timestamp, p.ID, r.iteration, systemPrompt, opts, r.lineCh, r.doneCh)
 	r.feedback = ""
 	return waitForRun(slot, r.lineCh, r.doneCh)
 }
 
 func (m Model) phaseSystemPrompt(r *phaseRun, phase phases.Phase) (string, error) {
 	systemPrompt := m.Prompts[phase.ID]
+	if r.resumed {
+		systemPrompt += m.l10n.T("resume.preamble", m.resumeStateArtifactName())
+	}
 	systemPrompt += m.l10n.Pick(
 		"\n\n# AFTER operating rules\nThe human makes every consequential decision. Preserve approved constraints and stop with DECISION_REQUIRED when one is missing. Mark every inference not grounded in project evidence as ASSUMPTION. Mark security-sensitive code involving authentication, payments, permissions, secrets, or personal data as REQUIRES_REVIEW. Generate tests with every behavior change, covering the nominal case, an edge case, and an error case. Treat generated output as unverified until commands prove it. Your response must be self-contained for a future session with no conversational memory.",
 		"\n\n# Règles d'opération AFTER\nLa personne responsable prend chaque décision conséquente. Respecte les contraintes approuvées et arrête-toi avec DECISION_REQUIRED lorsqu'une décision manque. Marque toute inférence non fondée sur le projet par ASSUMPTION. Marque le code sensible touchant l'authentification, les paiements, les permissions, les secrets ou les données personnelles par REQUIRES_REVIEW. Génère les tests avec chaque changement de comportement, couvrant le cas nominal, un cas limite et un cas d'erreur. Toute sortie générée demeure non vérifiée jusqu'à preuve par commandes. Ta réponse doit être autonome pour une session future sans mémoire conversationnelle.",

@@ -3,7 +3,9 @@ package git
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -71,6 +73,15 @@ func CurrentBranch(dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Checkout checks out an existing branch in dir.
+func Checkout(dir, branch string) error {
+	out, err := exec.Command("git", "-C", dir, "checkout", branch).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checkout %s: %w\n%s", branch, err, out)
+	}
+	return nil
+}
+
 // WorktreeAdd creates a new branch from HEAD and checks it out in a separate worktree.
 func WorktreeAdd(repoDir, worktreeDir, branch string) error {
 	out, err := exec.Command("git", "-C", repoDir, "worktree", "add", "-b", branch, worktreeDir).CombinedOutput()
@@ -123,4 +134,55 @@ func CommitAll(dir, message string) error {
 		return fmt.Errorf("git commit: %w\n%s", err, out)
 	}
 	return nil
+}
+
+// EnsureInfoExcludeEntry appends entry to the repository's info/exclude file if needed.
+func EnsureInfoExcludeEntry(dir, entry string) (bool, error) {
+	if !IsRepo(dir) {
+		return false, nil
+	}
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--git-path", "info/exclude").CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("resolve info/exclude path: %w\n%s", err, out)
+	}
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		return false, fmt.Errorf("resolve info/exclude path: empty path")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, fmt.Errorf("create info/exclude directory: %w", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("read info/exclude: %w", err)
+	}
+	if hasExactLine(string(data), entry) {
+		return false, nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return false, fmt.Errorf("open info/exclude: %w", err)
+	}
+	defer f.Close()
+	if len(data) > 0 && !strings.HasSuffix(string(data), "\n") {
+		if _, err := f.WriteString("\n"); err != nil {
+			return false, fmt.Errorf("write info/exclude newline: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintln(f, entry); err != nil {
+		return false, fmt.Errorf("append info/exclude: %w", err)
+	}
+	return true, nil
+}
+
+func hasExactLine(content, entry string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == entry {
+			return true
+		}
+	}
+	return false
 }

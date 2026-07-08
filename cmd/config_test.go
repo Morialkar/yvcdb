@@ -25,6 +25,23 @@ func TestRunConfig(t *testing.T) {
 	}
 }
 
+func TestRunConfigAcceptsOpenCode(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("YVCDB_CONFIG_HOME", configDir)
+	withStdin(t, "en\nopencode\n\n", func() {
+		if err := runConfig(nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	})
+	cfg, err := appconfig.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Language != "en" || cfg.Provider != "opencode" || cfg.Model != "" {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
 func TestRunConfigKeepsExistingDefaultsOnBlankInput(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("YVCDB_CONFIG_HOME", configDir)

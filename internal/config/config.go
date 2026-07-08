@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -17,6 +18,8 @@ const (
 	DefaultProvider   = "claude"
 	defaultCodexModel = "gpt-5.4"
 )
+
+var supportedProviders = []string{"claude", "codex", "opencode"}
 
 // Config contains the persistent user defaults for YVCDB.
 type Config struct {
@@ -31,14 +34,30 @@ func Default() Config {
 }
 
 // ValidProvider reports whether provider identifies a supported agent CLI.
-func ValidProvider(provider string) bool { return provider == "claude" || provider == "codex" }
+func ValidProvider(provider string) bool {
+	switch provider {
+	case "claude", "codex", "opencode":
+		return true
+	default:
+		return false
+	}
+}
+
+// SupportedProviders returns the supported provider names in display order.
+func SupportedProviders() []string {
+	return append([]string(nil), supportedProviders...)
+}
 
 // SuggestedModel returns the default model for provider.
 func SuggestedModel(provider string) string {
-	if provider == "codex" {
+	switch provider {
+	case "codex":
 		return defaultCodexModel
+	case "opencode":
+		return ""
+	default:
+		return DefaultModel
 	}
-	return DefaultModel
 }
 
 // Path returns the persistent YVCDB configuration path.
@@ -93,7 +112,7 @@ func Load() (Config, error) {
 		cfg.Language = DefaultLanguage
 	}
 	if !ValidProvider(cfg.Provider) {
-		cfg.Provider = DefaultProvider
+		return Default(), fmt.Errorf("invalid provider %q in configuration; valid providers: %s", cfg.Provider, strings.Join(supportedProviders, ", "))
 	}
 	if cfg.Model == "" {
 		cfg.Model = SuggestedModel(cfg.Provider)

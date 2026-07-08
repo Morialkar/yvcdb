@@ -9,6 +9,7 @@ import (
 
 	gitops "github.com/Morialkar/yvcdb/internal/git"
 	"github.com/Morialkar/yvcdb/internal/phases"
+	"github.com/Morialkar/yvcdb/internal/runner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -80,6 +81,298 @@ func TestViewsAndPhasePresentation(t *testing.T) {
 	}
 }
 
+func TestResumePromptViewShowsCandidate(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := &runner.ResumeMarker{
+		WorkflowMode:   workflow.Mode,
+		PhaseIndex:     0,
+		PhaseID:        workflow.Phases[0].ID,
+		Iteration:      3,
+		BranchName:     "refactor/test/diagnostic",
+		Provider:       "claude",
+		Model:          "sonnet",
+		PromptFilePath: "/tmp/.yvcdb_refactor_iter3.md",
+	}
+	m := NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "en", testPrompts(), marker, workflow)
+	if m.state != stateResumePrompt {
+		t.Fatalf("expected resume state, got %v", m.state)
+	}
+	view := m.View()
+	for _, want := range []string{"Resume interrupted phase", "Workflow mode: refactor", "Iteration: 3", "Branch: refactor/test/diagnostic", workflow.Phases[0].Label, m.phaseTitle(workflow.Phases[0].ID)} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("resume view missing %q: %s", want, view)
+		}
+	}
+}
+
+func TestResumeMarkerForRun(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(t.TempDir(), 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil, workflow)
+	m.state = stateStage
+	seqRun := &phaseRun{phaseIdx: 2, workDir: m.ProjectDir, branch: "refactor/ts/security"}
+	marker := m.resumeMarkerForRun(seqRun)
+	if marker == nil {
+		t.Fatal("expected resume marker for sequential run")
+	}
+	if marker.WorkflowMode != workflow.Mode || marker.PhaseIndex != seqRun.phaseIdx || marker.BranchName != seqRun.branch {
+		t.Fatalf("unexpected marker: %+v", marker)
+	}
+	parallelRun := &phaseRun{phaseIdx: 2, workDir: filepath.Join(t.TempDir(), "wt"), branch: "refactor/ts/security"}
+	if marker := m.resumeMarkerForRun(parallelRun); marker != nil {
+		t.Fatalf("expected no marker for parallel run, got %+v", marker)
+	}
+}
+
+func TestResumedPhaseSystemPromptIncludesPreamble(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AFTER_STANDARDS.md"), []byte("standards"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name      string
+		language  string
+		wantTitle string
+		wantBody  string
+	}{
+		{name: "english", language: "en", wantTitle: "Resume instructions", wantBody: "REFACTOR_STATE.md"},
+		{name: "french", language: "fr", wantTitle: "Consignes de reprise", wantBody: "REFACTOR_STATE.md"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(dir, 0, true, "claude", "sonnet", 2, tt.language, testPrompts(), nil, workflow)
+			run := &phaseRun{phaseIdx: 0, iteration: 2, workDir: dir, resumed: true}
+			prompt, err := m.phaseSystemPrompt(run, workflow.Phases[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(prompt, tt.wantTitle) || !strings.Contains(prompt, tt.wantBody) {
+				t.Fatalf("resume preamble missing: %q", prompt)
+			}
+		})
+	}
+}
+
+func TestNonResumedPhaseSystemPromptOmitsPreamble(t *testing.T) {
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AFTER_STANDARDS.md"), []byte("standards"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", testPrompts(), nil, workflow)
+	run := &phaseRun{phaseIdx: 0, iteration: 1, workDir: dir}
+	prompt, err := m.phaseSystemPrompt(run, workflow.Phases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "Resume instructions") || strings.Contains(prompt, "REFACTOR_STATE.md") {
+		t.Fatalf("unexpected resume preamble: %q", prompt)
+	}
+}
+
+func TestDiscardResumeCandidateRemovesArtifactsAndReturnsToModelSelect(t *testing.T) {
+	dir := newGitRepo(t)
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptFile := filepath.Join(dir, ".yvcdb_refactor_iter2.md")
+	if err := os.WriteFile(promptFile, []byte("prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	marker := &runner.ResumeMarker{
+		WorkflowMode:   workflow.Mode,
+		PhaseIndex:     0,
+		PhaseID:        workflow.Phases[0].ID,
+		Iteration:      2,
+		BranchName:     "main",
+		Provider:       "claude",
+		Model:          "sonnet",
+		PromptFilePath: promptFile,
+		LogFilePath:    filepath.Join(dir, "refactor-logs", "ts_diagnostic_iter2.md"),
+	}
+	if err := runner.WriteResumeMarker(filepath.Join(dir, ".yvcdb_resume.json"), *marker); err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), marker, workflow)
+	before, err := gitops.CurrentBranch(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := m.handleKey(key(tea.KeyRunes, 'd'))
+	m = updated.(Model)
+	after, err := gitops.CurrentBranch(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("discard should not touch git branch: before=%s after=%s", before, after)
+	}
+	if m.state != stateModelSelect {
+		t.Fatalf("expected model select after discard, got %v", m.state)
+	}
+	if m.ResumeCandidate != nil {
+		t.Fatal("resume candidate should be cleared")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".yvcdb_resume.json")); !os.IsNotExist(err) {
+		t.Fatalf("resume marker should be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(promptFile); !os.IsNotExist(err) {
+		t.Fatalf("prompt file should be removed, got err=%v", err)
+	}
+}
+
+func TestResumeInterruptedPhaseUsesRecordedProviderModelAndIteration(t *testing.T) {
+	dir := newGitRepo(t)
+	installFakeClaude(t)
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timestamp := "20260101_010203"
+	branch := "refactor/" + timestamp + "/" + workflow.Phases[0].ID
+	runTestGit(t, dir, "checkout", "-b", branch)
+	promptFile := filepath.Join(dir, ".yvcdb_refactor_iter3.md")
+	if err := os.WriteFile(promptFile, []byte("stale prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	marker := &runner.ResumeMarker{
+		WorkflowMode:     workflow.Mode,
+		PhaseIndex:       0,
+		PhaseID:          workflow.Phases[0].ID,
+		Iteration:        3,
+		BranchName:       branch,
+		Provider:         "claude",
+		Model:            "sonnet",
+		SessionTimestamp: timestamp,
+		PromptFilePath:   promptFile,
+	}
+	m := NewModel(dir, 0, false, "opencode", "wrong", 2, "en", testPrompts(), marker, workflow)
+	updated, _ := m.handleKey(key(tea.KeyRunes, 'r'))
+	m = updated.(Model)
+	if m.state != stateStage {
+		t.Fatalf("expected stage state after resume, got %v", m.state)
+	}
+	if m.Provider != marker.Provider || m.AgentModel != marker.Model {
+		t.Fatalf("resume should use recorded provider/model, got %s/%s", m.Provider, m.AgentModel)
+	}
+	if m.StartPhase != marker.PhaseIndex {
+		t.Fatalf("resume should use recorded start phase, got %d", m.StartPhase)
+	}
+	if m.stageIdx != 0 {
+		t.Fatalf("unexpected stage index %d", m.stageIdx)
+	}
+	if len(m.runs) != 1 {
+		t.Fatalf("expected one resumed run, got %d", len(m.runs))
+	}
+	if m.runs[0].phaseIdx != marker.PhaseIndex || m.runs[0].iteration != marker.Iteration {
+		t.Fatalf("resumed run mismatch: %+v", m.runs[0])
+	}
+	if m.runs[0].branch != marker.BranchName {
+		t.Fatalf("expected resumed branch %q, got %q", marker.BranchName, m.runs[0].branch)
+	}
+	if m.timestamp != timestamp {
+		t.Fatalf("expected resumed timestamp %q, got %q", timestamp, m.timestamp)
+	}
+	if _, err := os.Stat(promptFile); !os.IsNotExist(err) {
+		t.Fatalf("stale prompt file should be removed on resume, got err=%v", err)
+	}
+	cancelRuns(m)
+	m = drainActiveRuns(t, m)
+}
+
+func TestResumePromptDeclinesParallelStage(t *testing.T) {
+	dir := newGitRepo(t)
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow.Stages = [][]int{{0, 1}}
+	marker := &runner.ResumeMarker{
+		WorkflowMode:   workflow.Mode,
+		PhaseIndex:     0,
+		PhaseID:        workflow.Phases[0].ID,
+		Iteration:      2,
+		BranchName:     "main",
+		Provider:       "claude",
+		Model:          "sonnet",
+		PromptFilePath: filepath.Join(dir, ".yvcdb_refactor_iter2.md"),
+	}
+	if err := os.WriteFile(marker.PromptFilePath, []byte("prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.WriteResumeMarker(filepath.Join(dir, ".yvcdb_resume.json"), *marker); err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), marker, workflow)
+	updated, _ := m.handleKey(key(tea.KeyRunes, 'r'))
+	m = updated.(Model)
+	if m.state != stateModelSelect {
+		t.Fatalf("expected fallback to model select, got %v", m.state)
+	}
+	if !strings.Contains(m.statusMsg, "parallel stage is not supported") {
+		t.Fatalf("expected parallel-stage warning, got %q", m.statusMsg)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".yvcdb_resume.json")); !os.IsNotExist(err) {
+		t.Fatalf("resume marker should be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(marker.PromptFilePath); !os.IsNotExist(err) {
+		t.Fatalf("prompt file should be removed, got err=%v", err)
+	}
+}
+
+func TestResumePromptBranchMissingFallsBack(t *testing.T) {
+	dir := newGitRepo(t)
+	workflow, err := phases.ForMode(phases.ModeRefactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptFile := filepath.Join(dir, ".yvcdb_refactor_iter2.md")
+	if err := os.WriteFile(promptFile, []byte("prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	marker := &runner.ResumeMarker{
+		WorkflowMode:   workflow.Mode,
+		PhaseIndex:     0,
+		PhaseID:        workflow.Phases[0].ID,
+		Iteration:      2,
+		BranchName:     "missing-branch",
+		Provider:       "claude",
+		Model:          "sonnet",
+		PromptFilePath: promptFile,
+	}
+	if err := runner.WriteResumeMarker(filepath.Join(dir, ".yvcdb_resume.json"), *marker); err != nil {
+		t.Fatal(err)
+	}
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), marker, workflow)
+	updated, _ := m.handleKey(key(tea.KeyRunes, 'r'))
+	m = updated.(Model)
+	if m.state != stateModelSelect {
+		t.Fatalf("expected fallback to model select, got %v", m.state)
+	}
+	if !strings.Contains(m.statusMsg, "no longer exists") {
+		t.Fatalf("expected missing-branch warning, got %q", m.statusMsg)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".yvcdb_resume.json")); !os.IsNotExist(err) {
+		t.Fatalf("resume marker should be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(promptFile); !os.IsNotExist(err) {
+		t.Fatalf("prompt file should be removed, got err=%v", err)
+	}
+}
+
 func TestGreenfieldWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
 	dir := t.TempDir()
 	workflow, err := phases.ForMode(phases.ModeGreenfield)
@@ -90,7 +383,7 @@ func TestGreenfieldWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
 	for _, phase := range workflow.Phases {
 		prompts[phase.ID] = "prompt for " + phase.ID
 	}
-	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, workflow)
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, nil, workflow)
 	if len(m.Workflow.Phases) != 7 || len(m.checkItems) != 9 {
 		t.Fatalf("unexpected greenfield model: phases=%d checklist=%d", len(m.Workflow.Phases), len(m.checkItems))
 	}
@@ -119,7 +412,7 @@ func TestFeatureWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
 	for _, phase := range workflow.Phases {
 		prompts[phase.ID] = "prompt for " + phase.ID
 	}
-	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "fr", prompts, workflow)
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "fr", prompts, nil, workflow)
 	if len(m.Workflow.Phases) != 6 || len(m.checkItems) != 9 {
 		t.Fatalf("unexpected feature model: phases=%d checklist=%d", len(m.Workflow.Phases), len(m.checkItems))
 	}
@@ -148,7 +441,7 @@ func TestDebugWorkflowUsesManagedChecklistAndStandards(t *testing.T) {
 	for _, phase := range workflow.Phases {
 		prompts[phase.ID] = "prompt for " + phase.ID
 	}
-	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, workflow)
+	m := NewModel(dir, 0, true, "claude", "sonnet", 2, "en", prompts, nil, workflow)
 	if len(m.Workflow.Phases) != 6 || len(m.checkItems) != 9 {
 		t.Fatalf("unexpected debug model: phases=%d checklist=%d", len(m.Workflow.Phases), len(m.checkItems))
 	}
@@ -290,7 +583,7 @@ func TestGitSetupCommandAndCommitChanges(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_NAME", "YVCDB Test")
 	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
 
-	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	msg := m.doGitInit()()
 	done, ok := msg.(gitSetupDoneMsg)
 	if !ok || done.err != nil || !done.useGit {
@@ -323,7 +616,7 @@ func TestParallelStageIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts())
+	m := NewModel(dir, 0, false, "claude", "sonnet", 2, "en", testPrompts(), nil)
 	m.Workflow.Stages = [][]int{{0}, {1}, {2, 3, 4}, {5}}
 	m.state = stateStage
 	m.stageIdx = 2
@@ -445,7 +738,7 @@ func TestAdditionalKeyPathsAndCancellation(t *testing.T) {
 
 func newTestModel(t *testing.T) Model {
 	t.Helper()
-	return NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "en", testPrompts())
+	return NewModel(t.TempDir(), 0, true, "claude", "sonnet", 2, "en", testPrompts(), nil)
 }
 
 func testPrompts() map[string]string {

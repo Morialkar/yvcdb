@@ -8,21 +8,26 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Morialkar/yvcdb/internal/git"
 )
 
 const (
 	// DefaultMaxTurns is the Claude turn limit used when no positive limit is supplied.
-	DefaultMaxTurns    = 20
-	previousLogLines   = 100
-	maxJSONEventBytes  = 1024 * 1024
-	toolInputRunes     = 120
-	toolResultRunes    = 200
-	commandOutputRunes = 300
+	DefaultMaxTurns           = 20
+	DefaultInactivityTimeout  = 10 * time.Minute
+	promptFileExcludePattern  = ".yvcdb_*"
+	resumeMarkerFileName      = ".yvcdb_resume.json"
+	resumeMarkerSchemaVersion = 1
+	previousLogLines          = 100
+	maxJSONEventBytes         = 1024 * 1024
+	toolInputRunes            = 120
+	toolResultRunes           = 200
+	commandOutputRunes        = 300
 )
 
 // streamEvent is a partial decode of claude's stream-json format.
@@ -93,11 +98,29 @@ func eventToLines(ev streamEvent, language string) []string {
 
 // Options controls an agent phase execution.
 type Options struct {
-	Provider string
-	Model    string
-	MaxTurns int
-	Feedback string
-	Language string
+	Provider          string
+	Model             string
+	MaxTurns          int
+	Feedback          string
+	Language          string
+	InactivityTimeout time.Duration
+	ResumeMarker      *ResumeMarker
+}
+
+// ResumeMarker stores the metadata needed to resume an interrupted phase.
+type ResumeMarker struct {
+	SchemaVersion    int    `json:"schemaVersion"`
+	WorkflowMode     string `json:"workflowMode"`
+	PhaseIndex       int    `json:"phaseIndex"`
+	PhaseID          string `json:"phaseID"`
+	Iteration        int    `json:"iteration"`
+	BranchName       string `json:"branchName"`
+	Provider         string `json:"provider"`
+	Model            string `json:"model"`
+	SessionTimestamp string `json:"sessionTimestamp"`
+	PID              int    `json:"pid"`
+	PromptFilePath   string `json:"promptFilePath,omitempty"`
+	LogFilePath      string `json:"logFilePath"`
 }
 
 type codexEvent struct {
@@ -112,6 +135,113 @@ type codexEvent struct {
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+type inactivityWatchdog struct {
+	activity chan struct{}
+	stopCh   chan struct{}
+	done     chan struct{}
+	fired    chan struct{}
+}
+
+func newInactivityWatchdog(timeout time.Duration, cancel context.CancelFunc) *inactivityWatchdog {
+	w := &inactivityWatchdog{
+		activity: make(chan struct{}, 1),
+		stopCh:   make(chan struct{}),
+		done:     make(chan struct{}),
+		fired:    make(chan struct{}),
+	}
+	go func() {
+		defer close(w.done)
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		reset := func() {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(timeout)
+		}
+		for {
+			select {
+			case <-timer.C:
+				select {
+				case <-w.fired:
+				default:
+					close(w.fired)
+				}
+				cancel()
+				return
+			case <-w.activity:
+				reset()
+			case <-w.stopCh:
+				return
+			}
+		}
+	}()
+	return w
+}
+
+func (w *inactivityWatchdog) recordActivity() {
+	select {
+	case w.activity <- struct{}{}:
+	default:
+	}
+}
+
+func (w *inactivityWatchdog) stop() {
+	select {
+	case <-w.stopCh:
+	default:
+		close(w.stopCh)
+	}
+	<-w.done
+}
+
+func (w *inactivityWatchdog) firedNow() bool {
+	select {
+	case <-w.fired:
+		return true
+	default:
+		return false
+	}
+}
+
+// WriteResumeMarker writes a resume marker JSON file to path.
+func WriteResumeMarker(path string, marker ResumeMarker) error {
+	marker.SchemaVersion = resumeMarkerSchemaVersion
+	data, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal resume marker: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write resume marker: %w", err)
+	}
+	return nil
+}
+
+// ParseResumeMarker decodes a resume marker and validates its schema version.
+func ParseResumeMarker(data []byte) (ResumeMarker, error) {
+	var marker ResumeMarker
+	if err := json.Unmarshal(data, &marker); err != nil {
+		return ResumeMarker{}, fmt.Errorf("parse resume marker: %w", err)
+	}
+	if marker.SchemaVersion != resumeMarkerSchemaVersion {
+		return ResumeMarker{}, fmt.Errorf("resume marker schema version %d unsupported", marker.SchemaVersion)
+	}
+	return marker, nil
+}
+
+// ReadResumeMarker reads and parses a resume marker from path.
+func ReadResumeMarker(path string) (ResumeMarker, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ResumeMarker{}, err
+	}
+	return ParseResumeMarker(data)
 }
 
 func codexEventToLines(ev codexEvent) []string {
@@ -184,12 +314,42 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			doneCh <- fmt.Errorf("create log: %w", err)
 			return
 		}
-		failBeforeStart := func(runErr error) {
+		var watchdog *inactivityWatchdog
+		promptFilePath := ""
+		resumeMarkerPath := ""
+		// Prompt files and resume markers are kept only on genuine user cancellation.
+		cleanupResumeArtifacts := func() error {
+			var runErr error
+			if promptFilePath != "" {
+				if err := os.Remove(promptFilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+					runErr = errors.Join(runErr, fmt.Errorf("remove prompt file: %w", err))
+				}
+			}
+			if resumeMarkerPath != "" {
+				if err := os.Remove(resumeMarkerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+					runErr = errors.Join(runErr, fmt.Errorf("remove resume marker: %w", err))
+				}
+			}
+			return runErr
+		}
+		finish := func(runErr error, retainResumeArtifacts bool) {
+			if watchdog != nil {
+				watchdog.stop()
+				watchdog = nil
+			}
+			if !retainResumeArtifacts {
+				if cleanupErr := cleanupResumeArtifacts(); cleanupErr != nil {
+					runErr = errors.Join(runErr, cleanupErr)
+				}
+			}
 			if closeErr := f.Close(); closeErr != nil {
 				runErr = errors.Join(runErr, fmt.Errorf("close event log: %w", closeErr))
 			}
 			close(lineCh)
 			doneCh <- runErr
+		}
+		failBeforeStart := func(runErr error) {
+			finish(runErr, false)
 		}
 		projectLabel := "Project"
 		if opts.Language == "fr" {
@@ -233,51 +393,82 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		if maxTurns <= 0 {
 			maxTurns = DefaultMaxTurns
 		}
-		provider := opts.Provider
-		if provider == "" {
-			provider = "claude"
+		inactivityTimeout := opts.InactivityTimeout
+		if inactivityTimeout <= 0 {
+			inactivityTimeout = DefaultInactivityTimeout
 		}
-		var cmd *exec.Cmd
-		if provider == "codex" {
-			prompt := systemPrompt + "\n\n---\n\n" + userPrompt
-			args := []string{"-a", "never", "exec", "--json", "--color", "never", "--sandbox", "workspace-write", "--skip-git-repo-check", "--ephemeral", "-C", projectDir}
-			if model := strings.TrimSpace(opts.Model); model != "" {
-				args = append(args, "--model", model)
+		selected := selectProvider(opts.Provider)
+		if selected.needsPromptFile() {
+			promptFile, err := os.CreateTemp(projectDir, fmt.Sprintf(".yvcdb_%s_iter%d_*.md", phaseID, iteration))
+			if err != nil {
+				failBeforeStart(fmt.Errorf("create prompt file: %w", err))
+				return
 			}
-			args = append(args, prompt)
-			cmd = exec.CommandContext(ctx, "codex", args...)
-		} else {
-			args := []string{
-				"-p", userPrompt,
-				"--append-system-prompt", systemPrompt,
-				"--allowedTools", "Read,Write,Edit,Bash,Glob,Grep",
-				"--output-format", "stream-json",
-				"--verbose",
-				"--max-turns", fmt.Sprint(maxTurns),
+			if _, err := promptFile.WriteString(systemPrompt); err != nil {
+				_ = promptFile.Close()
+				promptFilePath = promptFile.Name()
+				failBeforeStart(fmt.Errorf("write prompt file: %w", err))
+				return
 			}
-			if model := strings.TrimSpace(opts.Model); model != "" {
-				args = append(args, "--model", model)
+			if err := promptFile.Close(); err != nil {
+				promptFilePath = promptFile.Name()
+				failBeforeStart(fmt.Errorf("close prompt file: %w", err))
+				return
 			}
-			cmd = exec.CommandContext(ctx, "claude", args...)
+			promptFilePath = promptFile.Name()
+			if _, err := git.EnsureInfoExcludeEntry(projectDir, promptFileExcludePattern); err != nil {
+				failBeforeStart(fmt.Errorf("exclude prompt files: %w", err))
+				return
+			}
+			if notice := strings.TrimSpace(selected.startupNotice(opts.Language)); notice != "" {
+				if _, err := fmt.Fprintln(f, notice); err != nil {
+					failBeforeStart(fmt.Errorf("write startup notice: %w", err))
+					return
+				}
+				lineCh <- notice
+			}
 		}
+		if opts.ResumeMarker != nil {
+			if _, err := git.EnsureInfoExcludeEntry(projectDir, promptFileExcludePattern); err != nil {
+				failBeforeStart(fmt.Errorf("exclude prompt files: %w", err))
+				return
+			}
+			resumeMarkerPath = filepath.Join(projectDir, resumeMarkerFileName)
+			marker := *opts.ResumeMarker
+			marker.SchemaVersion = resumeMarkerSchemaVersion
+			marker.PhaseID = phaseID
+			marker.Iteration = iteration
+			marker.Provider = opts.Provider
+			marker.Model = opts.Model
+			marker.SessionTimestamp = timestamp
+			marker.PID = os.Getpid()
+			marker.PromptFilePath = promptFilePath
+			marker.LogFilePath = logFile
+			if err := WriteResumeMarker(resumeMarkerPath, marker); err != nil {
+				failBeforeStart(fmt.Errorf("write resume marker: %w", err))
+				return
+			}
+		}
+		cmd := selected.buildCommand(ctx, projectDir, systemPrompt, userPrompt, opts.Model, promptFilePath, maxTurns)
 		cmd.Dir = projectDir
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			failBeforeStart(fmt.Errorf("open %s stdout: %w", provider, err))
+			failBeforeStart(fmt.Errorf("open %s stdout: %w", selected.name, err))
 			return
 		}
 		// stderr: forward raw (warnings, auth errors)
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
-			failBeforeStart(fmt.Errorf("open %s stderr: %w", provider, err))
+			failBeforeStart(fmt.Errorf("open %s stderr: %w", selected.name, err))
 			return
 		}
 
 		if err := cmd.Start(); err != nil {
-			failBeforeStart(fmt.Errorf("start %s CLI: %w", provider, err))
+			failBeforeStart(fmt.Errorf("start %s CLI: %w", selected.name, err))
 			return
 		}
+		watchdog = newInactivityWatchdog(inactivityTimeout, cancel)
 
 		// stderr forwarded as-is in background. Wait before closing lineCh.
 		var stderrWG sync.WaitGroup
@@ -287,13 +478,16 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 			defer stderrWG.Done()
 			sc := bufio.NewScanner(stderr)
 			for sc.Scan() {
+				if watchdog != nil {
+					watchdog.recordActivity()
+				}
 				line := sc.Text()
 				if strings.TrimSpace(line) != "" {
 					lineCh <- "  [stderr] " + line
 				}
 			}
 			if err := sc.Err(); err != nil {
-				stderrScanErr = fmt.Errorf("read %s stderr: %w", provider, err)
+				stderrScanErr = fmt.Errorf("read %s stderr: %w", selected.name, err)
 				// drain so the subprocess is not blocked writing to a full pipe
 				_, _ = io.Copy(io.Discard, stderr)
 			}
@@ -305,6 +499,9 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		var logErr error
 		maxTurnsReached := false
 		for sc.Scan() {
+			if watchdog != nil {
+				watchdog.recordActivity()
+			}
 			raw := sc.Text()
 			if logErr == nil {
 				if _, err := fmt.Fprintln(f, raw); err != nil {
@@ -312,33 +509,11 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 				}
 			}
 
-			if provider == "codex" {
-				var ev codexEvent
-				if err := json.Unmarshal([]byte(raw), &ev); err != nil {
-					if t := strings.TrimSpace(raw); t != "" {
-						lineCh <- t
-					}
-					continue
-				}
-				for _, line := range codexEventToLines(ev) {
-					lineCh <- line
-				}
-				continue
-			}
-
-			var ev streamEvent
-			if err := json.Unmarshal([]byte(raw), &ev); err != nil {
-				// not JSON (startup messages etc.) — forward as-is
-				if t := strings.TrimSpace(raw); t != "" {
-					lineCh <- t
-				}
-				continue
-			}
-			if ev.Type == "result" && ev.Subtype == "error_max_turns" {
+			lines, reachedMaxTurns := selected.parseLine(raw, opts.Language)
+			if reachedMaxTurns {
 				maxTurnsReached = true
 			}
-
-			for _, line := range eventToLines(ev, opts.Language) {
+			for _, line := range lines {
 				lineCh <- line
 			}
 		}
@@ -352,15 +527,15 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		// finish reading both pipes before Wait: Wait closes them
 		stderrWG.Wait()
 		waitErr := cmd.Wait()
-		closeErr := f.Close()
-		close(lineCh)
 
 		var runErr error
-		if waitErr != nil && !(provider == "claude" && maxTurnsReached) && !errors.Is(ctx.Err(), context.Canceled) {
-			runErr = fmt.Errorf("%s CLI failed: %w", provider, waitErr)
+		if watchdog != nil && watchdog.firedNow() {
+			runErr = fmt.Errorf("inactivity timeout after %s", inactivityTimeout)
+		} else if waitErr != nil && !selected.waitSucceeded(waitErr, ctx.Err(), maxTurnsReached) {
+			runErr = fmt.Errorf("%s CLI failed: %w", selected.name, waitErr)
 		}
 		if stdoutScanErr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("read %s stdout: %w", provider, stdoutScanErr))
+			runErr = errors.Join(runErr, fmt.Errorf("read %s stdout: %w", selected.name, stdoutScanErr))
 		}
 		if stderrScanErr != nil {
 			runErr = errors.Join(runErr, stderrScanErr)
@@ -368,10 +543,8 @@ func RunPhase(projectDir, logDir, timestamp, phaseID string, iteration int, syst
 		if logErr != nil {
 			runErr = errors.Join(runErr, logErr)
 		}
-		if closeErr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("close event log: %w", closeErr))
-		}
-		doneCh <- runErr
+		retainResumeArtifacts := ctx.Err() == context.Canceled && (watchdog == nil || !watchdog.firedNow())
+		finish(runErr, retainResumeArtifacts)
 	}()
 	return cancel
 }

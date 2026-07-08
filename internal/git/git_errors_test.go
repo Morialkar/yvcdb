@@ -33,6 +33,12 @@ func TestCreateBranchFailsOutsideRepo(t *testing.T) {
 	}
 }
 
+func TestCheckoutFailsOutsideRepo(t *testing.T) {
+	if err := Checkout(t.TempDir(), "feature"); err == nil {
+		t.Fatal("expected error outside a repository")
+	}
+}
+
 func TestBranchExistsFailsOutsideRepo(t *testing.T) {
 	// git show-ref exits 128 outside a repo, which is not the "absent" exit code 1
 	if _, err := BranchExists(t.TempDir(), "feature"); err == nil {
@@ -160,6 +166,13 @@ func TestCommitAllFailsWithNothingToCommit(t *testing.T) {
 	}
 }
 
+func TestCheckoutFailsForMissingBranch(t *testing.T) {
+	dir := initRepo(t)
+	if err := Checkout(dir, "missing"); err == nil {
+		t.Fatal("expected checkout error for missing branch")
+	}
+}
+
 func TestRebaseFailureWithNoRebaseInProgress(t *testing.T) {
 	dir := initRepo(t)
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x\n"), 0o644); err != nil {
@@ -175,5 +188,102 @@ func TestRebaseFailureWithNoRebaseInProgress(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "abort rebase") {
 		t.Fatalf("expected joined abort error, got: %v", err)
+	}
+}
+
+func TestCommitAllRespectsPromptFileExclude(t *testing.T) {
+	dir := initRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "source.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(dir, ".yvcdb_phase_iter1_abcd.md")
+	if err := os.WriteFile(promptPath, []byte("system prompt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*"); err != nil {
+		t.Fatal(err)
+	} else if !added {
+		t.Fatal("expected exclusion entry to be added")
+	}
+	if err := CommitAll(dir, "phase snapshot"); err != nil {
+		t.Fatal(err)
+	}
+	tree := runGitOutput(t, dir, "ls-tree", "-r", "--name-only", "HEAD")
+	if !strings.Contains(tree, "source.go") {
+		t.Fatalf("expected committed source file, got: %q", tree)
+	}
+	if strings.Contains(tree, ".yvcdb_phase_iter1_abcd.md") {
+		t.Fatalf("prompt file should not be committed, tree: %q", tree)
+	}
+}
+
+func TestCommitAllRespectsResumeMarkerExclude(t *testing.T) {
+	dir := initRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "source.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(dir, ".yvcdb_resume.json")
+	if err := os.WriteFile(markerPath, []byte(`{"schemaVersion":1,"workflowMode":"refactor"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*"); err != nil {
+		t.Fatal(err)
+	} else if !added {
+		t.Fatal("expected exclusion entry to be added")
+	}
+	if err := CommitAll(dir, "resume marker snapshot"); err != nil {
+		t.Fatal(err)
+	}
+	tree := runGitOutput(t, dir, "ls-tree", "-r", "--name-only", "HEAD")
+	if !strings.Contains(tree, "source.go") {
+		t.Fatalf("expected committed source file, got: %q", tree)
+	}
+	if strings.Contains(tree, ".yvcdb_resume.json") {
+		t.Fatalf("resume marker should not be committed, tree: %q", tree)
+	}
+}
+
+func TestEnsureInfoExcludeEntrySkipsNonRepo(t *testing.T) {
+	if added, err := EnsureInfoExcludeEntry(t.TempDir(), ".yvcdb_*"); err != nil {
+		t.Fatal(err)
+	} else if added {
+		t.Fatal("non-repo should not add an entry")
+	}
+}
+
+func TestEnsureInfoExcludeEntryCreatesMissingInfoDir(t *testing.T) {
+	dir := initRepo(t)
+	infoDir := filepath.Join(dir, ".git", "info")
+	if err := os.RemoveAll(infoDir); err != nil {
+		t.Fatal(err)
+	}
+	added, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !added {
+		t.Fatal("expected entry to be added after recreating info dir")
+	}
+	path := resolveGitPath(t, dir, runGitOutput(t, dir, "rev-parse", "--git-path", "info/exclude"))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), ".yvcdb_*") {
+		t.Fatalf("exclude entry missing: %q", data)
+	}
+}
+
+func TestEnsureInfoExcludeEntryFailsWhenExcludeIsDirectory(t *testing.T) {
+	dir := initRepo(t)
+	infoDir := filepath.Join(dir, ".git", "info")
+	if err := os.RemoveAll(infoDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(infoDir, "exclude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureInfoExcludeEntry(dir, ".yvcdb_*"); err == nil {
+		t.Fatal("expected read error when exclude path is a directory")
 	}
 }

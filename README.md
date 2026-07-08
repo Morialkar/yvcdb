@@ -6,7 +6,7 @@
 
 *[Documentation en français](README.fr.md)*
 
-YVCDB is an interactive CLI that applies the AFTER methodology through Claude Code or Codex CLI. It can refactor an existing codebase or guide a new project from specification through adversarial review, with a human approval gate after every phase.
+YVCDB is an interactive CLI that applies the AFTER methodology through Claude Code, Codex CLI, or OpenCode. It can refactor an existing codebase or guide a new project from specification through adversarial review, with a human approval gate after every phase.
 
 The interface defaults to English and also supports French.
 
@@ -20,7 +20,7 @@ YVCDB is the reference implementation of the "Test Everything Rigorously" half o
 ## Requirements
 
 - Go 1.26 or newer
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) or Codex CLI
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), Codex CLI, or [OpenCode](https://opencode.ai)
 - Git, unless YVCDB is run with `--no-git`
 - An authenticated session for the selected provider
 
@@ -33,7 +33,10 @@ git --version
 # One of these is required:
 claude --version
 codex --version
+opencode --version
 ```
+
+OpenCode supports 75+ model providers including free-tier APIs and fully local models via Ollama, enabling complete AFTER workflows at zero cost. Authenticate it once with `opencode auth login`.
 
 ## Installation
 
@@ -87,8 +90,8 @@ yvcdb config
 It configures:
 
 - interface and response language: `en` or `fr`;
-- AI CLI provider: `claude` or `codex`;
-- the provider's default model, such as `sonnet` for Claude or `gpt-5.4` for Codex.
+- AI CLI provider: `claude`, `codex`, or `opencode`;
+- the provider's default model, such as `sonnet` for Claude or `gpt-5.4` for Codex. Leave the model blank for OpenCode to use the default configured in your OpenCode settings.
 
 Defaults are English, Claude, and `sonnet`. On macOS, configuration is stored at:
 
@@ -108,7 +111,7 @@ The persistent file can also be edited directly:
 }
 ```
 
-Codex runs non-interactively with JSONL output, ephemeral sessions, and a `workspace-write` sandbox. Claude continues to use its `stream-json` output mode.
+Codex runs non-interactively with JSONL output, ephemeral sessions, and a `workspace-write` sandbox. Claude continues to use its `stream-json` output mode. OpenCode runs non-interactively with JSON output and auto-approved permissions so a phase never blocks on a prompt.
 
 YVCDB ships parallel English and French core prompts. The configured language selects both the interface strings and the embedded prompt set.
 
@@ -142,7 +145,7 @@ Available flags:
 
 | Flag | Description |
 | --- | --- |
-| `--provider claude\|codex` | Override the configured AI CLI provider for this run |
+| `--provider claude\|codex\|opencode` | Override the configured AI CLI provider for this run |
 | `--model <model>` | Override the configured provider model for this run |
 | `--lang en\|fr` | Override the configured language for this run |
 | `--max-turns <n>` | Set maximum turns for Claude; default: `20`. Codex CLI has no equivalent flag |
@@ -216,6 +219,8 @@ When Git integration is enabled, YVCDB:
 - commits approved changes;
 
 If branch creation, commit, rebase, or merge fails, YVCDB stops that path and reports the error instead of silently advancing. Conflicted rebases are aborted and their worktrees are preserved for manual resolution. Run with a clean working tree for predictable results.
+
+If a phase is interrupted, for example with Ctrl+C during a run, YVCDB keeps a small git-excluded resume marker. On the next launch in that project, it offers to resume the same phase on the same branch and continue from the working tree plus the phase state file, or discard the saved state and clean up. An explicit `--phase` or `--mode` suppresses the offer. Resume for parallel stages is not supported yet.
 
 ## Logs
 
